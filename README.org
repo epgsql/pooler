@@ -1,0 +1,150 @@
+* pidq - A Process Pool Library for Erlang
+
+** Use pidq to manage pools of processes (pids).
+
+- Protect the pids from being used concurrently.  The main pidq
+  interface is =pidq:take_pid/0= and =pidq:return_pid/2=.  The pidq
+  server will keep track of which pids are _in use_ and which are
+  _free_.
+
+- Maintain the size of the pid pool.  Specify a maximum number of pids
+  in the pool.  Trigger pid creation when the free count drops below a
+  minimum level or when a pid is marked as failing.
+
+- Organize pids by type and randomly load-balance pids by type.  This
+  is useful when the pids represent client processes connected to a
+  particular node in a cluster (think database read slaves).  Separate
+  pools are maintained for each type and a request for a pid will
+  randomly select a type.
+
+** Motivation
+
+The need for the pidq kit arose while writing an Erlang-based
+application that uses [[https://wiki.basho.com/display/RIAK/][Riak]] for data storage.  When using the Erlang
+protocol buffer client for Riak, one should avoid accessing a given
+client concurrently.  This is because each client is associated with a
+unique client ID that corresponds to an element in an object's vector
+clock.  Concurrent action from the same client ID defeats the vector
+clock.  For some further explaination, see [1] and [2].
+
+I wanted to avoid spinning up a new client for each request in the
+application.  Riak's protocol buffer client is a gen_server process
+and my intuition is that one doesn't want to pay for the startup time
+for every request you send to an app.  This suggested a pool of
+clients with some management to avoid concurrent use of a given
+client.  On top of that, it seemed convenient to add the ability to
+load balance between clients connected to different nodes in the Riak
+cluster.  The load-balancing is a secondary feature; even if you end
+up setting up [[http://haproxy.1wt.eu/][HAProxy]] for that aspect, you might still want the client
+pooling.
+
+[1] http://lists.basho.com/pipermail/riak-users_lists.basho.com/2010-September/001900.html
+[2] http://lists.basho.com/pipermail/riak-users_lists.basho.com/2010-September/001904.html
+
+** Usage and API
+
+*** Startup configuration
+
+The idea is that you would wire up pidq to be a supervised process in
+your application.  When you start pidq, you specify a module and
+function to use for creating new pids.  You also specify the
+properties for each pool that you want pidq to manage, including the
+arguments to pass to the pid starter function.
+
+An example configuration looks like this:
+
+#+BEGIN_SRC erlang
+  Pool1 = [{name, "node1"},
+           {max_pids, 10},
+           {min_free, 2},
+           {init_size, 5}
+           {pid_starter_args, Args1}],
+  
+  Pool2 = [{name, "node2"},
+           {max_pids, 100},
+           {min_free, 2},
+           {init_size, 50}
+           {pid_starter_args, Args2}],
+  
+  Config = [{pid_starter, {M, F}},
+            {pid_stopper, {M, F}},
+            {pools, [Pool1, Pool2]}]
+
+  % either call this directly, or wire this
+  % call into your application's supervisor  
+  pidq:start(Config)
+
+#+END_SRC
+
+Each pool has a unique name, a maximum number of pids, an initial
+number of pids, and a minimum free pids count.  When pidq starts, it
+will create pids to match the init_size value.  If there are min_free
+pids or fewer, pidq will add a pid as long as that doesn't bring the
+total used + free count over max_pids.
+
+Specifying a pid_stopper function is optional.  If not specified,
+=exit(pid, kill)= will be used to shutdown pids in the case of error,
+pidq shutdown, or pool removal.  The function specified will be passed
+a pid as returned by the pid_starter function.
+
+*** Getting and returning pids
+
+Once started, the main interaction you will have with pidq is through
+two functions, =take_pid/0= and =return_pid/2=.
+
+Call =pidq:take_pid()= to obtain a pid from the pool.  When you are done
+with it, return it to the pool using =pidq:return_pid(Pid, ok)=.  If
+you encountered an error using the pid, you can pass =fail= as the
+second argument.  In this case, pidq will permently remove that pid
+from the pool and start a new pid to replace it.
+
+*** Other things you can do
+
+You can get the status for the system via =pidq:status()=.  This will
+return some informational details about the pools being managed.
+
+You can also add or remove new pools while pidq is running using
+=pidq:add_pool/1= and =pidq:remove_pool/1=.  Each pid 
+
+** Details
+
+pidq is implemented as a gen_server.  Server state consists of a dict
+of pools keyed by pool name.  Each pool keeps track of its parameters,
+a free list, and an in-use list.  Since our motivating use-case is
+Riak's pb client, we opt to reuse a given client as much as possible
+to avoid unnecessary vector clock growth.  So pids are taken from the
+head of the free list and returned to the head of the free list.
+
+It is an error to add a pool with a name that already exists.
+
+Pool removal has two forms:
+
+- _graceful_ pids in the free list are killed (using exit(pid, kill)
+  unless a pid_stopper is specified in the pool parameters.  No pids
+  will be handed out from this pool's free list.  As pids are
+  returned, they are shut down.  When the pool is empty, it is
+  removed.
+
+- _immediate_ all pids in free and in-use lists are shut down; the
+  pool is removed.
+
+
+#+BEGIN_SRC erlang
+  -spec(take_pid() -> pid()).
+  
+  -spec(return_pid(pid(), ok | fail) -> ignore).
+  
+  -spec(status() -> [term()]).
+  
+  -type(pid_type_opt() ::
+        {name, string()} |
+        {max_pids, int()} |
+        {min_free, int()} |
+        {init_size, int()} |
+        {pid_starter_args, [term()]}).
+  
+  -type(pid_type_spec() :: [pid_type_opt()]).
+  -spec(add_type(pid_type_spec()) -> ok | {error, Why}).
+  -spec(remove_type(string()) -> ok | {error, Why}).
+#+END_SRC
+
