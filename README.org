@@ -4,8 +4,8 @@
 
 - Protect the pids from being used concurrently.  The main pidq
   interface is =pidq:take_pid/0= and =pidq:return_pid/2=.  The pidq
-  server will keep track of which pids are _in use_ and which are
-  _free_.
+  server will keep track of which pids are *in use* and which are
+  *free*.
 
 - Maintain the size of the pid pool.  Specify a maximum number of pids
   in the pool.  Trigger pid creation when the free count drops below a
@@ -28,7 +28,7 @@ clock.  Concurrent action from the same client ID defeats the vector
 clock.  For some further explaination, see [1] and [2].
 
 I wanted to avoid spinning up a new client for each request in the
-application.  Riak's protocol buffer client is a gen_server process
+application.  Riak's protocol buffer client is a =gen_server= process
 and my intuition is that one doesn't want to pay for the startup time
 for every request you send to an app.  This suggested a pool of
 clients with some management to avoid concurrent use of a given
@@ -78,14 +78,14 @@ An example configuration looks like this:
 
 Each pool has a unique name, a maximum number of pids, an initial
 number of pids, and a minimum free pids count.  When pidq starts, it
-will create pids to match the init_size value.  If there are min_free
+will create pids to match the =init_size= value.  If there are =min_free=
 pids or fewer, pidq will add a pid as long as that doesn't bring the
-total used + free count over max_pids.
+total used + free count over =max_pids=.
 
-Specifying a pid_stopper function is optional.  If not specified,
+Specifying a =pid_stopper= function is optional.  If not specified,
 =exit(pid, kill)= will be used to shutdown pids in the case of error,
 pidq shutdown, or pool removal.  The function specified will be passed
-a pid as returned by the pid_starter function.
+a pid as returned by the =pid_starter= function.
 
 *** Getting and returning pids
 
@@ -108,7 +108,7 @@ You can also add or remove new pools while pidq is running using
 
 ** Details
 
-pidq is implemented as a gen_server.  Server state consists of a dict
+pidq is implemented as a =gen_server=.  Server state consists of a dict
 of pools keyed by pool name.  Each pool keeps track of its parameters,
 a free list, and an in-use list.  Since our motivating use-case is
 Riak's pb client, we opt to reuse a given client as much as possible
@@ -119,13 +119,13 @@ It is an error to add a pool with a name that already exists.
 
 Pool removal has two forms:
 
-- _graceful_ pids in the free list are killed (using exit(pid, kill)
-  unless a pid_stopper is specified in the pool parameters.  No pids
+- *graceful* pids in the free list are killed (using exit(pid, kill)
+  unless a =pid_stopper= is specified in the pool parameters.  No pids
   will be handed out from this pool's free list.  As pids are
   returned, they are shut down.  When the pool is empty, it is
   removed.
 
-- _immediate_ all pids in free and in-use lists are shut down; the
+- *immediate* all pids in free and in-use lists are shut down; the
   pool is removed.
 
 
