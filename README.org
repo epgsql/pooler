@@ -1,5 +1,9 @@
 * pidq - A Process Pool Library for Erlang
 
+*Note:* this is all work very much in progress.  If you are
+ interested, drop me a note.  Right now, it is really just a readme
+ and no working code.
+
 ** Use pidq to manage pools of processes (pids).
 
 - Protect the pids from being used concurrently.  The main pidq
@@ -108,12 +112,39 @@ You can also add or remove new pools while pidq is running using
 
 ** Details
 
-pidq is implemented as a =gen_server=.  Server state consists of a dict
-of pools keyed by pool name.  Each pool keeps track of its parameters,
-a free list, and an in-use list.  Since our motivating use-case is
-Riak's pb client, we opt to reuse a given client as much as possible
-to avoid unnecessary vector clock growth.  So pids are taken from the
-head of the free list and returned to the head of the free list.
+pidq is implemented as a =gen_server=.  Server state consists of:
+
+- A dict of pools keyed by pool name.
+- A dict mapping in use pids to their pool name.
+- A dict mapping consumer process pids to the pid they are using.
+- A module and function to use for starting new pids.
+
+Each pool keeps track of its parameters, such as max pids to allow,
+initial pids to start, number of pids in use, and a list of free pids.
+
+Since our motivating use-case is Riak's pb client, we opt to reuse a
+given client as much as possible to avoid unnecessary vector clock
+growth; pids are taken from the head of the free list and returned
+to the head of the free list.
+
+pidq is a system process and traps exits.  Before giving out a pid, it
+links to the requesting consumer process.  This way, if the consumer
+process crashes, pidq can recover the pid.  When the pid is returned,
+the requesting process will be unlinked.  Since the state of the pid
+is unknown in the case of a crashing consumer, we will destroy the pid
+and add a fresh one to the pool.
+
+The pid starter MFA should use spawn_link so that pidq will be linked
+to the pids (is it confusing that we've taken the term "pid" and
+turned it into a noun of this system?).  This way, when pids crash,
+pidq will be notified and can refill the pool with new pids.
+
+Also note that an alternative to a consumer explicitly returning a pid
+is for the consumer to exit normally.  pidq will receive the normal
+exit and can reclaim the pid.  In fact, we might want to implement pid
+return as "fake death" by sending pidq exit(PidqPid, normal).
+
+*** Pool management
 
 It is an error to add a pool with a name that already exists.
 
@@ -127,7 +158,6 @@ Pool removal has two forms:
 
 - *immediate* all pids in free and in-use lists are shut down; the
   pool is removed.
-
 
 #+BEGIN_SRC erlang
   -spec(take_pid() -> pid()).
