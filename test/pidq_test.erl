@@ -72,8 +72,11 @@ stop_tc(Pid) ->
 
 tc_starter(Type) ->
     Ref = make_ref(),
-    spawn(fun() -> tc_loop({Type, Ref}) end).
+    spawn_link(fun() -> tc_loop({Type, Ref}) end).
 
+assert_tc_valid(Pid) ->
+    ?assertMatch({_Type, _Ref}, get_tc_id(Pid)),
+    ok.
 
 tc_sanity_test() ->
     Pid1 = tc_starter("1"),
@@ -90,6 +93,78 @@ user_sanity_test() ->
     ?assertMatch({"1", _Ref}, user_id(User)),
     user_crash(User),
     stop_tc(Pid1).
+
+pidq_basics_test_() ->
+    {foreach,
+     % setup
+     fun() ->
+             Pools = [[{name, "p1"},
+                       {max_pids, 3}, {min_free, 1},
+                       {init_size, 2}, {pid_starter_args, ["type-0"]}]],
+
+             Config = [{pid_starter, {?MODULE, tc_starter}},
+                       {pid_stopper, {?MODULE, stop_tc}},
+                       {pools, Pools}],
+             pidq:start(Config)
+     end,
+     fun(_X) ->
+             pidq:stop()
+     end,
+     [
+      {"take and return one",
+       fun() ->
+               P = pidq:take_pid(),
+               ?assertMatch({"type-0", _Id}, get_tc_id(P)),
+               ok = pidq:return_pid(P, ok)
+       end},
+
+      {"pids are created on demand until max",
+       fun() ->
+               Pids = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
+               ?assertMatch(error_no_pids, pidq:take_pid()),
+               ?assertMatch(error_no_pids, pidq:take_pid()),
+               PRefs = [ R || {_T, R} <- [ get_tc_id(P) || P <- Pids ] ],
+               ?assertEqual(3, length(lists:usort(PRefs)))
+       end
+      },
+
+      {"pids are reused most recent return first",
+       fun() ->
+               P1 = pidq:take_pid(),
+               P2 = pidq:take_pid(),
+               ?assertNot(P1 == P2),
+               ok =  pidq:return_pid(P1, ok),
+               ok = pidq:return_pid(P2, ok),
+               % pids are reused most recent first
+               ?assertEqual(P2, pidq:take_pid()),
+               ?assertEqual(P1, pidq:take_pid())
+       end},
+
+      {"if a pid crashes it is replaced",
+       fun() ->
+               Pids0 = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
+               Ids0 = [ get_tc_id(P) || P <- Pids0 ],
+               % crash them all
+               [ P ! crash || P <- Pids0 ],
+               Pids1 = get_n_pids(3, []),
+               Ids1 = [ get_tc_id(P) || P <- Pids1 ],
+               [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
+       end
+       }
+
+      % {"if a pid is returned with bad status it is replaced",
+      %  fun() ->
+      %          P1 = pidq:take_pid(),
+      %          P2 = pidq:take_pid(),
+      %          pidq:return_pid(P2, ok),
+      %          pidq:return_pid(P1, fail),
+      %          PN = pidq:take_pid(),
+      %          ?assertEqual(P2, pidq:take_pid()),
+      %          ?assertNot(PN == P1)
+      %  end
+      %  }
+      ]}.
+
 
 pidq_integration_test_() ->
     {foreach,
@@ -152,4 +227,16 @@ pidq_integration_test_() ->
       %          TcIds3 = lists:sort([ user_id(UPid) || UPid <- Users ]),
       %          ?assertEqual(lists:usort(TcIds3), TcIds3)
 
-             
+
+% testing crash recovery means race conditions when either pids
+% haven't yet crashed or pidq hasn't recovered.  So this helper loops
+% forver until N pids are obtained, ignoring error_no_pids.
+get_n_pids(0, Acc) ->
+    Acc;
+get_n_pids(N, Acc) ->
+    case pidq:take_pid() of
+        error_no_pids ->
+            get_n_pids(N, Acc);
+        Pid ->
+            get_n_pids(N - 1, [Pid|Acc])
+    end.

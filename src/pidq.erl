@@ -29,7 +29,6 @@
 
 -export([start/1,
          stop/0,
-         stop/1,
          take_pid/0,
          return_pid/2,
          remove_pool/2,
@@ -52,14 +51,12 @@ start(Config) ->
 stop() ->
     gen_server:call(?SERVER, stop).
 
-stop(_How) ->
-    stop().
-
 take_pid() ->
     gen_server:call(?SERVER, take_pid).
 
 return_pid(Pid, Status) when Status == ok; Status == fail ->
-    gen_server:call(?SERVER, {return_pid, Pid, Status}).
+    gen_server:cast(?SERVER, {return_pid, Pid, Status}),
+    ok.
 
 remove_pool(Name, How) when How == graceful; How == immediate ->
     gen_server:call(?SERVER, {remove_pool, Name, How}).
@@ -82,6 +79,7 @@ init(Config) ->
                                      {?MODULE, default_stopper}),
                    npools = length(Pools),
                    pools = dict:from_list(Pools)},
+    process_flag(trap_exit, true),
     {ok, State}.
 
 handle_call(take_pid, {CPid, _Tag}, State) ->
@@ -90,16 +88,25 @@ handle_call(take_pid, {CPid, _Tag}, State) ->
     {NewPid, NewState} = take_pid(PoolName, CPid, State),
     {reply, NewPid, NewState};
 handle_call(stop, _From, State) ->
+    % FIXME:
+    % loop over in use and free pids and stop them?
+    % {M, F} = State#state.pid_stopper,
     {stop, normal, stop_ok, State};
 handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
 
-handle_cast({return_pid, Pid, _Status}, State) ->
-    {noreply, do_return_pid(Pid, State)};
+handle_cast({return_pid, Pid, Status}, State) ->
+    {noreply, do_return_pid(Pid, Status, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info({'EXIT', Pid, _Reason}, State) ->
+    State1 = case dict:find(Pid, State#state.in_use_pids) of
+                 {ok, _PName} -> do_return_pid(Pid, fail, State);
+                 error -> State
+             end,
+    {noreply, State1};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -123,13 +130,15 @@ props_to_pool(P) ->
     Values = [ ?gv(Field, P2) || Field <- record_info(fields, pool) ],
     list_to_tuple([pool|Values]).
 
+add_pids(error, _N, State) ->
+    {bad_pool_name, State};
 add_pids(PoolName, N, State) ->
     #state{pools = Pools, pid_starter = {M, F}} = State,
     Pool = dict:fetch(PoolName, Pools),
     #pool{max_pids = Max, free_pids = Free, in_use_count = NumInUse,
           pid_starter_args = Args} = Pool,
     Total = length(Free) + NumInUse,
-    case Total + N < Max of
+    case Total + N =< Max of
         true ->
             % FIXME: we'll want to link to these pids so we'll know if
             % they crash. Or should the starter function be expected
@@ -149,8 +158,12 @@ take_pid(PoolName, From, State) ->
         [] when NumInUse == Max ->
             {error_no_pids, State};
         [] when NumInUse < Max ->
-            {_Status, State1} = add_pids(PoolName, 1, State),
-            take_pid(PoolName, From, State1);
+            case add_pids(PoolName, 1, State) of
+                {ok, State1} ->
+                    take_pid(PoolName, From, State1);
+                {max_pids_reached, _} ->
+                    {error_no_pids, State}
+            end;
         [Pid|Rest] ->
             % FIXME: handle min_free here -- should adding pids
             % to satisfy min_free be done in a spawned worker?
@@ -161,16 +174,30 @@ take_pid(PoolName, From, State) ->
                               consumer_to_pid = CPMap1}}
     end.
 
-do_return_pid(Pid, State) ->
+do_return_pid(Pid, Status, State) ->
     #state{in_use_pids = InUse, pools = Pools} = State,
     case dict:find(Pid, InUse) of
         {ok, PoolName} ->
             Pool = dict:fetch(PoolName, Pools),
-            #pool{free_pids = Free, in_use_count = NumInUse} = Pool,
-            Pool1 = Pool#pool{free_pids = [Pid|Free], in_use_count = NumInUse - 1},
-            State#state{in_use_pids = dict:erase(Pid, InUse),
-                        pools = dict:store(PoolName, Pool1, Pools)};
+            {Pool1, State1} =
+                case Status of
+                    ok -> {add_pid_to_free(Pid, Pool), State};
+                    fail -> handle_failed_pid(Pid, PoolName, Pool, State)
+                    end,
+            State1#state{in_use_pids = dict:erase(Pid, InUse),
+                         pools = dict:store(PoolName, Pool1, Pools)};
         error ->
             error_logger:warning_report({return_pid_not_found, Pid}),
             State
     end.
+
+add_pid_to_free(Pid, Pool) ->
+    #pool{free_pids = Free, in_use_count = NumInUse} = Pool,
+    Pool#pool{free_pids = [Pid|Free], in_use_count = NumInUse - 1}.
+
+handle_failed_pid(Pid, PoolName, Pool, State) ->
+    {M, F} = State#state.pid_stopper,
+    M:F(Pid),
+    {_, NewState} = add_pids(PoolName, 1, State),
+    NumInUse = Pool#pool.in_use_count,
+    {Pool#pool{in_use_count = NumInUse - 1}, NewState}.
