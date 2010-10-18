@@ -33,14 +33,14 @@ clock.  For some further explaination, see [1] and [2].
 
 I wanted to avoid spinning up a new client for each request in the
 application.  Riak's protocol buffer client is a =gen_server= process
-and my intuition is that one doesn't want to pay for the startup time
-for every request you send to an app.  This suggested a pool of
-clients with some management to avoid concurrent use of a given
-client.  On top of that, it seemed convenient to add the ability to
-load balance between clients connected to different nodes in the Riak
-cluster.  The load-balancing is a secondary feature; even if you end
-up setting up [[http://haproxy.1wt.eu/][HAProxy]] for that aspect, you might still want the client
-pooling.
+that initiates a connection to a Riak node and my intuition is that
+one doesn't want to pay for the startup time for every request you
+send to an app.  This suggested a pool of clients with some management
+to avoid concurrent use of a given client.  On top of that, it seemed
+convenient to add the ability to load balance between clients
+connected to different nodes in the Riak cluster.  The load-balancing
+is a secondary feature; even if you end up setting up [[http://haproxy.1wt.eu/][HAProxy]] for that
+aspect, you might still want the client pooling.
 
 [1] http://lists.basho.com/pipermail/riak-users_lists.basho.com/2010-September/001900.html
 [2] http://lists.basho.com/pipermail/riak-users_lists.basho.com/2010-September/001904.html
@@ -115,7 +115,8 @@ You can also add or remove new pools while pidq is running using
 pidq is implemented as a =gen_server=.  Server state consists of:
 
 - A dict of pools keyed by pool name.
-- A dict mapping in use pids to their pool name.
+- A dict mapping in-use pids to their pool name and the pid of the
+  consumer that is using the pid.
 - A dict mapping consumer process pids to the pid they are using.
 - A module and function to use for starting new pids.
 
@@ -130,9 +131,9 @@ to the head of the free list.
 pidq is a system process and traps exits.  Before giving out a pid, it
 links to the requesting consumer process.  This way, if the consumer
 process crashes, pidq can recover the pid.  When the pid is returned,
-the requesting process will be unlinked.  Since the state of the pid
-is unknown in the case of a crashing consumer, we will destroy the pid
-and add a fresh one to the pool.
+the link to the consumer process will be severed.  Since the state of
+the pid is unknown in the case of a crashing consumer, we will destroy
+the pid and add a fresh one to the pool.
 
 The pid starter MFA should use spawn_link so that pidq will be linked
 to the pids (is it confusing that we've taken the term "pid" and

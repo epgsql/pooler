@@ -9,8 +9,10 @@
 % and take a new pid, stop cleanly, and crash.
 
 start_user() ->
-    TC = pidq:take_pid(),
-    spawn(fun() -> user_loop(TC) end).
+    spawn(fun() ->
+                  TC = pidq:take_pid(),
+                  user_loop(TC)
+          end).
 
 user_id(Pid) ->
     Pid ! {get_tc_id, self()},
@@ -124,7 +126,7 @@ pidq_basics_test_() ->
                ?assertMatch(error_no_pids, pidq:take_pid()),
                ?assertMatch(error_no_pids, pidq:take_pid()),
                PRefs = [ R || {_T, R} <- [ get_tc_id(P) || P <- Pids ] ],
-               ?assertEqual(3, length(lists:usort(PRefs)))
+               ?assertEqual(length(PRefs), length(lists:usort(PRefs)))
        end
       },
 
@@ -133,7 +135,7 @@ pidq_basics_test_() ->
                P1 = pidq:take_pid(),
                P2 = pidq:take_pid(),
                ?assertNot(P1 == P2),
-               ok =  pidq:return_pid(P1, ok),
+               ok = pidq:return_pid(P1, ok),
                ok = pidq:return_pid(P2, ok),
                % pids are reused most recent first
                ?assertEqual(P2, pidq:take_pid()),
@@ -150,20 +152,33 @@ pidq_basics_test_() ->
                Ids1 = [ get_tc_id(P) || P <- Pids1 ],
                [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
        end
-       }
+       },
 
-      % {"if a pid is returned with bad status it is replaced",
-      %  fun() ->
-      %          P1 = pidq:take_pid(),
-      %          P2 = pidq:take_pid(),
-      %          pidq:return_pid(P2, ok),
-      %          pidq:return_pid(P1, fail),
-      %          PN = pidq:take_pid(),
-      %          ?assertEqual(P2, pidq:take_pid()),
-      %          ?assertNot(PN == P1)
-      %  end
-      %  }
-      ]}.
+      {"if a pid is returned with bad status it is replaced",
+       fun() ->
+               Pids0 = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
+               Ids0 = [ get_tc_id(P) || P <- Pids0 ],
+               % return them all marking as bad
+               [ pidq:return_pid(P, fail) || P <- Pids0 ],
+               Pids1 = get_n_pids(3, []),
+               Ids1 = [ get_tc_id(P) || P <- Pids1 ],
+               [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
+       end
+      },
+
+      {"if a consumer crashes, pid is replaced",
+       fun() ->
+               Consumer = start_user(),
+               StartId = user_id(Consumer),
+               ?debugVal(pidq:pool_stats("p1")),
+               user_crash(Consumer),
+               NewPid = hd(get_n_pids(1, [])),
+               NewId = get_tc_id(NewPid),
+               ?debugVal(pidq:pool_stats("p1")),
+               ?assertNot(NewId == StartId)
+       end
+      }
+     ]}.
 
 
 pidq_integration_test_() ->
@@ -171,7 +186,7 @@ pidq_integration_test_() ->
      % setup
      fun() ->
              Pools = [[{name, "p1"},
-                      {max_pids, 20},
+                      {max_pids, 10},
                       {min_free, 3},
                       {init_size, 10},
                       {pid_starter_args, ["type-0"]}]],
@@ -196,36 +211,38 @@ pidq_integration_test_() ->
                      TcIds = lists:sort([ user_id(UPid) || UPid <- Users ]),
                      ?assertEqual(lists:usort(TcIds), TcIds)
              end
-     end
-     ]
-    }.
+      end,
+
+      fun(Users) ->
+              fun() ->
+                      % users still unique after a renew cycle
+                      [ user_new_tc(UPid) || UPid <- Users ],
+                      TcIds = lists:sort([ user_id(UPid) || UPid <- Users ]),
+                      ?assertEqual(lists:usort(TcIds), TcIds)
+              end
+      end
+      % ,
 
       % fun(Users) ->
-      % ]}
-
-      % {"users still unique after a renew cycle",
-      %  fun() ->
-      %          Users = [ start_user() || _X <- lists:seq(1, 10) ],
-      %          % return and take new tc pids, expect unique
-      %          [ user_new_tc(UPid) || UPid <- Users ],
-      %          TcIds = lists:sort([ user_id(UPid) || UPid <- Users ]),
-      %          % each user has a different tc ID
-      %          ?assertEqual(lists:usort(TcIds), TcIds)
-
-
-      % ]}.
-
-
+      %         fun() ->
+      %                 % all users crash, pids reused
+      %                 TcIds1 = lists:sort([ user_id(UPid) || UPid <- Users ]),
+      %                 [ user_crash(UPid) || UPid <- Users ],
+      %                 % Seq = lists:seq(1, length(Users)),
+      %                 Seq = lists:seq(1, 5),
+      %                 Users2 = [ start_user() || _X <- Seq ],
+      %                 TcIds2 = lists:sort([ user_id(UPid) || UPid <- Users2 ]),
+      %                 ?assertEqual(TcIds1, TcIds2)
+      %         end
+      % end
+     ]
+    }.
 
       %          % return and take new tc pids, still unique
       %          [ user_new_tc(UPid) || UPid <- Users ],
       %          TcIds2 = lists:sort([ user_id(UPid) || UPid <- Users ]),
       %          ?assertEqual(lists:usort(TcIds2), TcIds2),
       %          % if the users all crash...
-      %          [ user_crash(UPid) || UPid <- Users ],
-      %          Users2 = [ start_user() || _X <- lists:seq(1, 10) ],
-      %          TcIds3 = lists:sort([ user_id(UPid) || UPid <- Users ]),
-      %          ?assertEqual(lists:usort(TcIds3), TcIds3)
 
 
 % testing crash recovery means race conditions when either pids

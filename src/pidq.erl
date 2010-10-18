@@ -33,6 +33,7 @@
          return_pid/2,
          remove_pool/2,
          add_pool/1,
+         pool_stats/1,
          status/0]).
 
 %% ------------------------------------------------------------------
@@ -55,7 +56,8 @@ take_pid() ->
     gen_server:call(?SERVER, take_pid).
 
 return_pid(Pid, Status) when Status == ok; Status == fail ->
-    gen_server:cast(?SERVER, {return_pid, Pid, Status}),
+    CPid = self(),
+    gen_server:cast(?SERVER, {return_pid, Pid, Status, CPid}),
     ok.
 
 remove_pool(Name, How) when How == graceful; How == immediate ->
@@ -63,6 +65,9 @@ remove_pool(Name, How) when How == graceful; How == immediate ->
 
 add_pool(Pool) ->
     gen_server:call(?SERVER, {add_pool, Pool}).
+
+pool_stats(Pool) ->
+    gen_server:call(?SERVER, {pool_stats, Pool}).
 
 status() ->
     gen_server:call(?SERVER, status).
@@ -92,19 +97,40 @@ handle_call(stop, _From, State) ->
     % loop over in use and free pids and stop them?
     % {M, F} = State#state.pid_stopper,
     {stop, normal, stop_ok, State};
+handle_call({pool_stats, PoolName}, _From, State) ->
+    Pool = dict:fetch(PoolName, State#state.pools),
+    Stats = [{in_use, dict:fetch_keys(State#state.in_use_pids)},
+             {free, Pool#pool.free_pids}],
+    {reply, Stats, State};
 handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
 
-handle_cast({return_pid, Pid, Status}, State) ->
-    {noreply, do_return_pid(Pid, Status, State)};
+handle_cast({return_pid, Pid, Status, CPid}, State) ->
+    {noreply, do_return_pid({Pid, Status}, CPid, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', Pid, _Reason}, State) ->
+handle_info({'EXIT', Pid, Reason}, State) ->
+    % error_logger:info_report({got_exit, Pid, Reason}),
     State1 = case dict:find(Pid, State#state.in_use_pids) of
-                 {ok, _PName} -> do_return_pid(Pid, fail, State);
-                 error -> State
+                 {ok, {_PName, CPid}} -> do_return_pid({Pid, fail}, CPid, State);
+                 error ->
+                     CPMap = State#state.consumer_to_pid,
+                     case dict:find(Pid, CPMap) of
+
+                         {ok, Pids} ->
+                             error_logger:info_report({{consumer, Pid, Reason}, Pids}),
+                             IsOk = case Reason of
+                                        normal -> ok;
+                                        _Crash -> fail
+                                    end,
+                             lists:foldl(fun(P, S) ->
+                                                 do_return_pid({P, IsOk}, Pid, S)
+                                         end, State, Pids);
+                         error ->
+                             State
+                     end
              end,
     {noreply, State1};
 handle_info(_Info, State) ->
@@ -167,17 +193,19 @@ take_pid(PoolName, From, State) ->
         [Pid|Rest] ->
             % FIXME: handle min_free here -- should adding pids
             % to satisfy min_free be done in a spawned worker?
+            erlang:link(From),
             Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1},
             CPMap1 = dict:update(From, fun(O) -> [Pid|O] end, [Pid], CPMap),
             {Pid, State#state{pools = dict:store(PoolName, Pool1, Pools),
-                              in_use_pids = dict:store(Pid, PoolName, InUse),
+                              in_use_pids = dict:store(Pid, {PoolName, From}, InUse),
                               consumer_to_pid = CPMap1}}
     end.
 
-do_return_pid(Pid, Status, State) ->
-    #state{in_use_pids = InUse, pools = Pools} = State,
+do_return_pid({Pid, Status}, CPid, State) ->
+    #state{in_use_pids = InUse, pools = Pools,
+           consumer_to_pid = CPMap} = State,
     case dict:find(Pid, InUse) of
-        {ok, PoolName} ->
+        {ok, {PoolName, _CPid2}} -> % FIXME, assert that CPid2 == CPid?
             Pool = dict:fetch(PoolName, Pools),
             {Pool1, State1} =
                 case Status of
@@ -185,9 +213,10 @@ do_return_pid(Pid, Status, State) ->
                     fail -> handle_failed_pid(Pid, PoolName, Pool, State)
                     end,
             State1#state{in_use_pids = dict:erase(Pid, InUse),
-                         pools = dict:store(PoolName, Pool1, Pools)};
+                         pools = dict:store(PoolName, Pool1, Pools),
+                         consumer_to_pid = cpmap_remove(Pid, CPid, CPMap)};
         error ->
-            error_logger:warning_report({return_pid_not_found, Pid}),
+            error_logger:warning_report({return_pid_not_found, Pid, dict:to_list(InUse)}),
             State
     end.
 
@@ -201,3 +230,19 @@ handle_failed_pid(Pid, PoolName, Pool, State) ->
     {_, NewState} = add_pids(PoolName, 1, State),
     NumInUse = Pool#pool.in_use_count,
     {Pool#pool{in_use_count = NumInUse - 1}, NewState}.
+
+cpmap_remove(Pid, CPid, CPMap) ->
+    case dict:find(CPid, CPMap) of
+        {ok, Pids0} ->
+            unlink(CPid), % FIXME: flush msg queue here?
+            Pids1 = lists:delete(Pid, Pids0),
+            case Pids1 of
+                [_H|_T] ->
+                    dict:store(CPid, Pids1, CPMap);
+                [] ->
+                    dict:erase(CPid, CPMap)
+            end;
+        error ->
+            % FIXME: this shouldn't happen, should we log or error?
+            CPMap
+    end.
