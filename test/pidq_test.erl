@@ -126,6 +126,7 @@ pidq_basics_test_() ->
                ?assertMatch(error_no_pids, pidq:take_pid()),
                ?assertMatch(error_no_pids, pidq:take_pid()),
                PRefs = [ R || {_T, R} <- [ get_tc_id(P) || P <- Pids ] ],
+               % no duplicates
                ?assertEqual(length(PRefs), length(lists:usort(PRefs)))
        end
       },
@@ -221,29 +222,24 @@ pidq_integration_test_() ->
                       ?assertEqual(lists:usort(TcIds), TcIds)
               end
       end
-      % ,
+      ,
 
-      % fun(Users) ->
-      %         fun() ->
-      %                 % all users crash, pids reused
-      %                 TcIds1 = lists:sort([ user_id(UPid) || UPid <- Users ]),
-      %                 [ user_crash(UPid) || UPid <- Users ],
-      %                 % Seq = lists:seq(1, length(Users)),
-      %                 Seq = lists:seq(1, 5),
-      %                 Users2 = [ start_user() || _X <- Seq ],
-      %                 TcIds2 = lists:sort([ user_id(UPid) || UPid <- Users2 ]),
-      %                 ?assertEqual(TcIds1, TcIds2)
-      %         end
-      % end
+      fun(Users) ->
+              fun() ->
+                      % all users crash, pids are replaced
+                      TcIds1 = lists:sort([ user_id(UPid) || UPid <- Users ]),
+                      [ user_crash(UPid) || UPid <- Users ],
+                      Seq = lists:seq(1, 5),
+                      Users2 = [ start_user() || _X <- Seq ],
+                      TcIds2 = lists:sort([ user_id(UPid) || UPid <- Users2 ]),
+                      Both =
+                          sets:to_list(sets:intersection([sets:from_list(TcIds1),
+                                                          sets:from_list(TcIds2)])),
+                      ?assertEqual([], Both)
+              end
+      end
      ]
     }.
-
-      %          % return and take new tc pids, still unique
-      %          [ user_new_tc(UPid) || UPid <- Users ],
-      %          TcIds2 = lists:sort([ user_id(UPid) || UPid <- Users ]),
-      %          ?assertEqual(lists:usort(TcIds2), TcIds2),
-      %          % if the users all crash...
-
 
 % testing crash recovery means race conditions when either pids
 % haven't yet crashed or pidq hasn't recovered.  So this helper loops

@@ -179,3 +179,11 @@ Pool removal has two forms:
   -spec(remove_type(string()) -> ok | {error, Why}).
 #+END_SRC
 
+
+** Notes
+*** Move pid_starter and pid_stopper to pool config
+This way, you can have pools backed not only by different config, but
+by entirely different services.  Could be useful for testing a new
+client implementation.
+*** Rename something other than "pid"
+*** Consider ets for state storage rather than dict
