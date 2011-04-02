@@ -197,6 +197,9 @@ supervisor:start_child(S1, []).
 {ok, S2} = pidq_sup:start_link([]).
 supervisor:start_child(pidq_pool_sup, [A1]).
 
+application:load(pidq).
+C = application:get_all_env(pidq).
+pidq:start(C).
 #+END_SRC
 
 *** supervision strategy
