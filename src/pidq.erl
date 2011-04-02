@@ -28,6 +28,7 @@
 %% ------------------------------------------------------------------
 
 -export([start/1,
+         start_link/1,
          stop/0,
          take_pid/0,
          return_pid/2,
@@ -45,6 +46,9 @@
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
+
+start_link(Config) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, Config, []).
 
 start(Config) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, Config, []).

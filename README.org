@@ -187,3 +187,26 @@ by entirely different services.  Could be useful for testing a new
 client implementation.
 *** Rename something other than "pid"
 *** Consider ets for state storage rather than dict
+
+#+BEGIN_SRC erlang
+pman:start().
+A1 = {riakc_pb_socket, start_link, ["127.0.0.1", 8081]}.
+{ok, S1} = pidq_pool_sup:start_link(A1).
+supervisor:start_child(S1, []).
+
+{ok, S2} = pidq_sup:start_link([]).
+supervisor:start_child(pidq_pool_sup, [A1]).
+
+#+END_SRC
+
+*** supervision strategy
+
+**** pidq_sup
+top-level supervisor watches pidq gen_server and the pidq_pool_sup
+supervisor.
+**** pidq_pool_sup
+A simple_one_for_one supervisor that is used to create/watch
+pidq_pooled_worker_sup supervisor.  You use this to create a new pool
+and specify the M,F,A of the pooled worker at start.
+**** pidq_pooled_worker_sup
+Another simple_one_for_one that is used to create actual workers.
