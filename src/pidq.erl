@@ -87,16 +87,14 @@ status() ->
 %% ------------------------------------------------------------------
 
 init(Config) ->
-    ?debugMsg("in pidq init"),
     PoolRecs = [ props_to_pool(P) || P <- ?gv(pools, Config) ],
-    ?debugVal(hd(PoolRecs)),
     Pools = [ {Pool#pool.name, Pool} || Pool <-  PoolRecs ],
-    ?debugMsg("have list"),
-    PoolSups = [ {P#pool.name,
-                  element(2, supervisor:start_child(pidq_pool_sup,
-                                                    [P#pool.start_mfa]))}
-                 || P <- PoolRecs ],
-    ?debugMsg("called start_child"),
+    PoolSups =
+        lists:map(
+          fun(#pool{name = Name, start_mfa = MFA}) ->
+                  {ok, SupPid} = supervisor:start_child(pidq_pool_sup, [MFA]),
+                  {Name, SupPid}
+          end, PoolRecs),
     % TODO: create initial workers here
     State = #state{npools = length(Pools),
                    pools = dict:from_list(Pools),
@@ -138,7 +136,6 @@ handle_info({'EXIT', Pid, Reason}, State) ->
                      case dict:find(Pid, CPMap) of
 
                          {ok, Pids} ->
-                             error_logger:info_report({{consumer, Pid, Reason}, Pids}),
                              IsOk = case Reason of
                                         normal -> ok;
                                         _Crash -> fail

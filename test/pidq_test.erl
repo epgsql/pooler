@@ -33,7 +33,13 @@ user_crash(Pid) ->
 user_loop(MyTC) ->
     receive
         {get_tc_id, From} ->
-            From ! get_tc_id(MyTC),
+            From ! pooled_gs:get_id(MyTC),
+            user_loop(MyTC);
+        {ping_tc, From} ->
+            From ! pooled_gs:ping(MyTC),
+            user_loop(MyTC);
+        {ping_count, From} ->
+            From ! pooled_gs:ping_count(MyTC),
             user_loop(MyTC);
         new_tc ->
             pidq:return_pid(MyTC, ok),
@@ -80,43 +86,42 @@ assert_tc_valid(Pid) ->
     ?assertMatch({_Type, _Ref}, get_tc_id(Pid)),
     ok.
 
-tc_sanity_test() ->
-    Pid1 = tc_starter("1"),
-    {"1", Id1} = get_tc_id(Pid1),
-    Pid2 = tc_starter("1"),
-    {"1", Id2} = get_tc_id(Pid2),
-    ?assertNot(Id1 == Id2),
-    stop_tc(Pid1),
-    stop_tc(Pid2).
+% tc_sanity_test() ->
+%     Pid1 = tc_starter("1"),
+%     {"1", Id1} = get_tc_id(Pid1),
+%     Pid2 = tc_starter("1"),
+%     {"1", Id2} = get_tc_id(Pid2),
+%     ?assertNot(Id1 == Id2),
+%     stop_tc(Pid1),
+%     stop_tc(Pid2).
 
-user_sanity_test() ->
-    Pid1 = tc_starter("1"),
-    User = spawn(fun() -> user_loop(Pid1) end),
-    ?assertMatch({"1", _Ref}, user_id(User)),
-    user_crash(User),
-    stop_tc(Pid1).
+% user_sanity_test() ->
+%     Pid1 = tc_starter("1"),
+%     User = spawn(fun() -> user_loop(Pid1) end),
+%     ?assertMatch({"1", _Ref}, user_id(User)),
+%     user_crash(User),
+%     stop_tc(Pid1).
 
 pidq_basics_test_() ->
     {foreach,
      % setup
      fun() ->
              Pools = [[{name, "p1"},
-                       {max_pids, 3}, {min_free, 1},
-                       {init_size, 2}, {pid_starter_args, ["type-0"]}]],
-
-             Config = [{pid_starter, {?MODULE, tc_starter}},
-                       {pid_stopper, {?MODULE, stop_tc}},
-                       {pools, Pools}],
-             pidq:start(Config)
+                       {max_count, 3},
+                       {init_count, 2},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-0"}]}}]],
+             application:set_env(pidq, pools, Pools),
+             application:start(pidq)
      end,
      fun(_X) ->
-             pidq:stop()
+             application:stop(pidq)
      end,
      [
       {"take and return one",
        fun() ->
                P = pidq:take_pid(),
-               ?assertMatch({"type-0", _Id}, get_tc_id(P)),
+               ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
                ok = pidq:return_pid(P, ok)
        end},
 
@@ -125,7 +130,7 @@ pidq_basics_test_() ->
                Pids = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
                ?assertMatch(error_no_pids, pidq:take_pid()),
                ?assertMatch(error_no_pids, pidq:take_pid()),
-               PRefs = [ R || {_T, R} <- [ get_tc_id(P) || P <- Pids ] ],
+               PRefs = [ R || {_T, R} <- [ pooled_gs:get_id(P) || P <- Pids ] ],
                % no duplicates
                ?assertEqual(length(PRefs), length(lists:usort(PRefs)))
        end
@@ -146,11 +151,11 @@ pidq_basics_test_() ->
       {"if a pid crashes it is replaced",
        fun() ->
                Pids0 = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
-               Ids0 = [ get_tc_id(P) || P <- Pids0 ],
+               Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % crash them all
-               [ P ! crash || P <- Pids0 ],
+               [ pooled_gs:crash(P) || P <- Pids0 ],
                Pids1 = get_n_pids(3, []),
-               Ids1 = [ get_tc_id(P) || P <- Pids1 ],
+               Ids1 = [ pooled_gs:get_id(P) || P <- Pids1 ],
                [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
        end
        },
@@ -158,11 +163,11 @@ pidq_basics_test_() ->
       {"if a pid is returned with bad status it is replaced",
        fun() ->
                Pids0 = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
-               Ids0 = [ get_tc_id(P) || P <- Pids0 ],
+               Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % return them all marking as bad
                [ pidq:return_pid(P, fail) || P <- Pids0 ],
                Pids1 = get_n_pids(3, []),
-               Ids1 = [ get_tc_id(P) || P <- Pids1 ],
+               Ids1 = [ pooled_gs:get_id(P) || P <- Pids1 ],
                [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
        end
       },
@@ -171,11 +176,9 @@ pidq_basics_test_() ->
        fun() ->
                Consumer = start_user(),
                StartId = user_id(Consumer),
-               ?debugVal(pidq:pool_stats("p1")),
                user_crash(Consumer),
                NewPid = hd(get_n_pids(1, [])),
-               NewId = get_tc_id(NewPid),
-               ?debugVal(pidq:pool_stats("p1")),
+               NewId = pooled_gs:get_id(NewPid),
                ?assertNot(NewId == StartId)
        end
       }
@@ -187,22 +190,19 @@ pidq_integration_test_() ->
      % setup
      fun() ->
              Pools = [[{name, "p1"},
-                      {max_pids, 10},
-                      {min_free, 3},
-                      {init_size, 10},
-                      {pid_starter_args, ["type-0"]}]],
-
-             Config = [{pid_starter, {?MODULE, tc_starter}},
-                       {pid_stopper, {?MODULE, stop_tc}},
-                       {pools, Pools}],
-             pidq:start(Config),
+                       {max_count, 10},
+                       {init_count, 10},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-0"}]}}]],
+             application:set_env(pidq, pools, Pools),
+             application:start(pidq),
              Users = [ start_user() || _X <- lists:seq(1, 10) ],
              Users
      end,
      % cleanup
      fun(Users) ->
              [ user_stop(U) || U <- Users ],
-             pidq:stop()
+             application:stop(pidq)
      end,
      %
      [
@@ -212,7 +212,8 @@ pidq_integration_test_() ->
                      TcIds = lists:sort([ user_id(UPid) || UPid <- Users ]),
                      ?assertEqual(lists:usort(TcIds), TcIds)
              end
-      end,
+      end
+      ,
 
       fun(Users) ->
               fun() ->
