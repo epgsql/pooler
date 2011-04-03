@@ -1,4 +1,4 @@
--module(pidq).
+-module(pooler).
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
 
@@ -92,7 +92,7 @@ init(Config) ->
     PoolSups =
         lists:map(
           fun(#pool{name = Name, start_mfa = MFA}) ->
-                  {ok, SupPid} = supervisor:start_child(pidq_pool_sup, [MFA]),
+                  {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [MFA]),
                   {Name, SupPid}
           end, PoolRecs),
     State0 = #state{npools = length(Pools),

@@ -1,4 +1,4 @@
--module(pidq_pooled_worker_sup).
+-module(pooler_pooled_worker_sup).
 
 -behaviour(supervisor).
 
