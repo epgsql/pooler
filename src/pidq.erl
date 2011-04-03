@@ -95,11 +95,14 @@ init(Config) ->
                   {ok, SupPid} = supervisor:start_child(pidq_pool_sup, [MFA]),
                   {Name, SupPid}
           end, PoolRecs),
-    % TODO: create initial workers here
-    State = #state{npools = length(Pools),
+    State0 = #state{npools = length(Pools),
                    pools = dict:from_list(Pools),
                    pool_sups = dict:from_list(PoolSups)
                   },
+    {ok, State} = lists:foldl(
+                    fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
+                            add_pids(PName, N, AccState)
+                    end, {ok, State0}, PoolRecs),
     process_flag(trap_exit, true),
     {ok, State}.
 
