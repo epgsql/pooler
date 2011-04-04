@@ -34,10 +34,9 @@
          stop/0,
          take_member/0,
          return_member/2,
-         remove_pool/2,
-         add_pool/1,
-         pool_stats/1,
-         status/0]).
+         % remove_pool/2,
+         % add_pool/1,
+         pool_stats/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -71,17 +70,17 @@ return_member(Pid, Status) when Status == ok; Status == fail ->
     gen_server:cast(?SERVER, {return_member, Pid, Status, CPid}),
     ok.
 
-remove_pool(Name, How) when How == graceful; How == immediate ->
-    gen_server:call(?SERVER, {remove_pool, Name, How}).
+% TODO:
+% remove_pool(Name, How) when How == graceful; How == immediate ->
+%     gen_server:call(?SERVER, {remove_pool, Name, How}).
 
-add_pool(Pool) ->
-    gen_server:call(?SERVER, {add_pool, Pool}).
+% TODO:
+% add_pool(Pool) ->
+%     gen_server:call(?SERVER, {add_pool, Pool}).
 
 pool_stats(Pool) ->
     gen_server:call(?SERVER, {pool_stats, Pool}).
 
-status() ->
-    gen_server:call(?SERVER, status).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
@@ -114,9 +113,6 @@ handle_call(take_member, {CPid, _Tag},
     {NewPid, NewState} = take_member(PoolName, CPid, State),
     {reply, NewPid, NewState};
 handle_call(stop, _From, State) ->
-    % FIXME:
-    % loop over in use and free pids and stop them?
-    % {M, F} = State#state.pid_stopper,
     {stop, normal, stop_ok, State};
 handle_call({pool_stats, PoolName}, _From, State) ->
     Pool = dict:fetch(PoolName, State#state.pools),
@@ -134,24 +130,26 @@ handle_cast(_Msg, State) ->
 
 handle_info({'EXIT', Pid, Reason}, State) ->
     % error_logger:info_report({got_exit, Pid, Reason}),
-    State1 = case dict:find(Pid, State#state.in_use_pids) of
-                 {ok, {_PName, CPid}} -> do_return_member({Pid, fail}, CPid, State);
-                 error ->
-                     CPMap = State#state.consumer_to_pid,
-                     case dict:find(Pid, CPMap) of
-
-                         {ok, Pids} ->
-                             IsOk = case Reason of
-                                        normal -> ok;
-                                        _Crash -> fail
-                                    end,
-                             lists:foldl(fun(P, S) ->
-                                                 do_return_member({P, IsOk}, Pid, S)
-                                         end, State, Pids);
-                         error ->
-                             State
-                     end
-             end,
+    State1 =
+        case dict:find(Pid, State#state.in_use_pids) of
+            {ok, {_PName, CPid}} ->
+                do_return_member({Pid, fail}, CPid, State);
+            error ->
+                CPMap = State#state.consumer_to_pid,
+                case dict:find(Pid, CPMap) of
+                    {ok, Pids} ->
+                        IsOk = case Reason of
+                                   normal -> ok;
+                                   _Crash -> fail
+                               end,
+                        lists:foldl(
+                          fun(P, S) ->
+                                  do_return_member({P, IsOk}, Pid, S)
+                          end, State, Pids);
+                    error ->
+                        State
+                end
+        end,
     {noreply, State1};
 handle_info(_Info, State) ->
     {noreply, State}.
