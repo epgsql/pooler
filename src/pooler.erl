@@ -31,8 +31,8 @@
 -export([start/1,
          start_link/1,
          stop/0,
-         take_pid/0,
-         return_pid/2,
+         take_member/0,
+         return_member/2,
          remove_pool/2,
          add_pool/1,
          pool_stats/1,
@@ -62,12 +62,12 @@ start(Config) ->
 stop() ->
     gen_server:call(?SERVER, stop).
 
-take_pid() ->
-    gen_server:call(?SERVER, take_pid).
+take_member() ->
+    gen_server:call(?SERVER, take_member).
 
-return_pid(Pid, Status) when Status == ok; Status == fail ->
+return_member(Pid, Status) when Status == ok; Status == fail ->
     CPid = self(),
-    gen_server:cast(?SERVER, {return_pid, Pid, Status, CPid}),
+    gen_server:cast(?SERVER, {return_member, Pid, Status, CPid}),
     ok.
 
 remove_pool(Name, How) when How == graceful; How == immediate ->
@@ -106,10 +106,10 @@ init(Config) ->
     process_flag(trap_exit, true),
     {ok, State}.
 
-handle_call(take_pid, {CPid, _Tag}, State) ->
+handle_call(take_member, {CPid, _Tag}, State) ->
     % FIXME: load-balance?
     PoolName = hd(dict:fetch_keys(State#state.pools)),
-    {NewPid, NewState} = take_pid(PoolName, CPid, State),
+    {NewPid, NewState} = take_member(PoolName, CPid, State),
     {reply, NewPid, NewState};
 handle_call(stop, _From, State) ->
     % FIXME:
@@ -125,15 +125,15 @@ handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
 
-handle_cast({return_pid, Pid, Status, CPid}, State) ->
-    {noreply, do_return_pid({Pid, Status}, CPid, State)};
+handle_cast({return_member, Pid, Status, CPid}, State) ->
+    {noreply, do_return_member({Pid, Status}, CPid, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({'EXIT', Pid, Reason}, State) ->
     % error_logger:info_report({got_exit, Pid, Reason}),
     State1 = case dict:find(Pid, State#state.in_use_pids) of
-                 {ok, {_PName, CPid}} -> do_return_pid({Pid, fail}, CPid, State);
+                 {ok, {_PName, CPid}} -> do_return_member({Pid, fail}, CPid, State);
                  error ->
                      CPMap = State#state.consumer_to_pid,
                      case dict:find(Pid, CPMap) of
@@ -144,7 +144,7 @@ handle_info({'EXIT', Pid, Reason}, State) ->
                                         _Crash -> fail
                                     end,
                              lists:foldl(fun(P, S) ->
-                                                 do_return_pid({P, IsOk}, Pid, S)
+                                                 do_return_member({P, IsOk}, Pid, S)
                                          end, State, Pids);
                          error ->
                              State
@@ -194,7 +194,7 @@ add_pids(PoolName, N, State) ->
             {max_count_reached, State}
     end.
 
-take_pid(PoolName, From, State) ->
+take_member(PoolName, From, State) ->
     #state{pools = Pools, in_use_pids = InUse, consumer_to_pid = CPMap} = State,
     Pool = dict:fetch(PoolName, Pools),
     #pool{max_count = Max, free_pids = Free, in_use_count = NumInUse} = Pool,
@@ -204,7 +204,7 @@ take_pid(PoolName, From, State) ->
         [] when NumInUse < Max ->
             case add_pids(PoolName, 1, State) of
                 {ok, State1} ->
-                    take_pid(PoolName, From, State1);
+                    take_member(PoolName, From, State1);
                 {max_count_reached, _} ->
                     {error_no_pids, State}
             end;
@@ -217,7 +217,7 @@ take_pid(PoolName, From, State) ->
                               consumer_to_pid = CPMap1}}
     end.
 
-do_return_pid({Pid, Status}, CPid, State) ->
+do_return_member({Pid, Status}, CPid, State) ->
     #state{in_use_pids = InUse, pools = Pools,
            consumer_to_pid = CPMap} = State,
     case dict:find(Pid, InUse) of
@@ -232,7 +232,7 @@ do_return_pid({Pid, Status}, CPid, State) ->
                          pools = dict:store(PoolName, Pool1, Pools),
                          consumer_to_pid = cpmap_remove(Pid, CPid, CPMap)};
         error ->
-            error_logger:warning_report({return_pid_not_found, Pid, dict:to_list(InUse)}),
+            error_logger:warning_report({return_member_not_found, Pid, dict:to_list(InUse)}),
             State
     end.
 

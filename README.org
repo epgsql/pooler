@@ -107,7 +107,7 @@ Here's an example session:
 application:start(pooler).
 P = pooler:take_member(),
 % use P
-pooler:return_pid(P, ok).
+pooler:return_member(P, ok).
 #+END_SRC
 
 Once started, the main interaction you will have with pooler is through
@@ -186,9 +186,9 @@ Pool removal has two forms:
   pool is removed.
 
 #+BEGIN_SRC erlang
-  -spec(take_pid() -> pid()).
+  -spec(take_member() -> pid()).
   
-  -spec(return_pid(pid(), ok | fail) -> ignore).
+  -spec(return_member(pid(), ok | fail) -> ignore).
   
   -spec(status() -> [term()]).
   

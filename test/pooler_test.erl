@@ -9,10 +9,7 @@
 % and take a new pid, stop cleanly, and crash.
 
 start_user() ->
-    spawn(fun() ->
-                  TC = pooler:take_pid(),
-                  user_loop(TC)
-          end).
+    spawn(fun() -> user_loop(start) end).
 
 user_id(Pid) ->
     Pid ! {get_tc_id, self()},
@@ -30,6 +27,8 @@ user_stop(Pid) ->
 user_crash(Pid) ->
     Pid ! crash.
 
+user_loop(Atom) when Atom =:= error_no_pids orelse Atom =:= start ->
+    user_loop(pooler:take_member());
 user_loop(MyTC) ->
     receive
         {get_tc_id, From} ->
@@ -42,11 +41,11 @@ user_loop(MyTC) ->
             From ! pooled_gs:ping_count(MyTC),
             user_loop(MyTC);
         new_tc ->
-            pooler:return_pid(MyTC, ok),
-            MyNewTC = pooler:take_pid(),
+            pooler:return_member(MyTC, ok),
+            MyNewTC = pooler:take_member(),
             user_loop(MyNewTC);
         stop ->
-            pooler:return_pid(MyTC, ok),
+            pooler:return_member(MyTC, ok),
             stopped;
         crash ->
             erlang:error({user_loop, kaboom})
@@ -120,16 +119,16 @@ pooler_basics_test_() ->
      [
       {"take and return one",
        fun() ->
-               P = pooler:take_pid(),
+               P = pooler:take_member(),
                ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
-               ok = pooler:return_pid(P, ok)
+               ok = pooler:return_member(P, ok)
        end},
 
       {"pids are created on demand until max",
        fun() ->
-               Pids = [pooler:take_pid(), pooler:take_pid(), pooler:take_pid()],
-               ?assertMatch(error_no_pids, pooler:take_pid()),
-               ?assertMatch(error_no_pids, pooler:take_pid()),
+               Pids = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
+               ?assertMatch(error_no_pids, pooler:take_member()),
+               ?assertMatch(error_no_pids, pooler:take_member()),
                PRefs = [ R || {_T, R} <- [ pooled_gs:get_id(P) || P <- Pids ] ],
                % no duplicates
                ?assertEqual(length(PRefs), length(lists:usort(PRefs)))
@@ -138,19 +137,19 @@ pooler_basics_test_() ->
 
       {"pids are reused most recent return first",
        fun() ->
-               P1 = pooler:take_pid(),
-               P2 = pooler:take_pid(),
+               P1 = pooler:take_member(),
+               P2 = pooler:take_member(),
                ?assertNot(P1 == P2),
-               ok = pooler:return_pid(P1, ok),
-               ok = pooler:return_pid(P2, ok),
+               ok = pooler:return_member(P1, ok),
+               ok = pooler:return_member(P2, ok),
                % pids are reused most recent first
-               ?assertEqual(P2, pooler:take_pid()),
-               ?assertEqual(P1, pooler:take_pid())
+               ?assertEqual(P2, pooler:take_member()),
+               ?assertEqual(P1, pooler:take_member())
        end},
 
       {"if a pid crashes it is replaced",
        fun() ->
-               Pids0 = [pooler:take_pid(), pooler:take_pid(), pooler:take_pid()],
+               Pids0 = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
                Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % crash them all
                [ pooled_gs:crash(P) || P <- Pids0 ],
@@ -162,10 +161,10 @@ pooler_basics_test_() ->
 
       {"if a pid is returned with bad status it is replaced",
        fun() ->
-               Pids0 = [pooler:take_pid(), pooler:take_pid(), pooler:take_pid()],
+               Pids0 = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
                Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % return them all marking as bad
-               [ pooler:return_pid(P, fail) || P <- Pids0 ],
+               [ pooler:return_member(P, fail) || P <- Pids0 ],
                Pids1 = get_n_pids(3, []),
                Ids1 = [ pooled_gs:get_id(P) || P <- Pids1 ],
                [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
@@ -248,7 +247,7 @@ pooler_integration_test_() ->
 get_n_pids(0, Acc) ->
     Acc;
 get_n_pids(N, Acc) ->
-    case pooler:take_pid() of
+    case pooler:take_member() of
         error_no_pids ->
             get_n_pids(N, Acc);
         Pid ->
