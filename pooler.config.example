@@ -1,7 +1,7 @@
 % -*- mode: erlang -*-
-% pidq app config
+% pooler app config
 [
- {pidq, [
+ {pooler, [
          {pools, [
                   [{name, "rc8081"},
                    {max_count, 5},
