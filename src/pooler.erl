@@ -18,7 +18,8 @@
           pools = dict:new()           :: dict:dictionary(),
           pool_sups = dict:new()       :: dict:dictionary(),
           in_use_pids = dict:new()     :: dict:dictionary(),
-          consumer_to_pid = dict:new() :: dict:dictionary()
+          consumer_to_pid = dict:new() :: dict:dictionary(),
+          pool_selector                :: array()
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
@@ -96,8 +97,9 @@ init(Config) ->
                   {Name, SupPid}
           end, PoolRecs),
     State0 = #state{npools = length(Pools),
-                   pools = dict:from_list(Pools),
-                   pool_sups = dict:from_list(PoolSups)
+                    pools = dict:from_list(Pools),
+                    pool_sups = dict:from_list(PoolSups),
+                    pool_selector = array:from_list([PN || {PN, _} <- Pools])
                   },
     {ok, State} = lists:foldl(
                     fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
@@ -106,9 +108,9 @@ init(Config) ->
     process_flag(trap_exit, true),
     {ok, State}.
 
-handle_call(take_member, {CPid, _Tag}, State) ->
-    % FIXME: load-balance?
-    PoolName = hd(dict:fetch_keys(State#state.pools)),
+handle_call(take_member, {CPid, _Tag},
+            State = #state{pool_selector = PS, npools = NP}) ->
+    PoolName = array:get(crypto:rand_uniform(0, NP), PS),
     {NewPid, NewState} = take_member(PoolName, CPid, State),
     {reply, NewPid, NewState};
 handle_call(stop, _From, State) ->
