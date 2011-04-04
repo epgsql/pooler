@@ -122,14 +122,6 @@ new member to replace it.  If your process is short lived, you can
 omit the call to =return_member=.  In this case, pooler will detect
 the normal exit of the consumer and reclaim the member.
 
-*** Other things you can do
-
-You can get the status for the system via =pooler:status()=.  This will
-return some informational details about the pools being managed.
-
-You can also add or remove new pools while pooler is running using
-=pooler:add_pool/1= and =pooler:remove_pool/1= (not yet implemented). 
-
 ** Details
 
 pooler is implemented as a =gen_server=.  Server state consists of:
@@ -167,9 +159,10 @@ gen_server and the pooler_pool_sup supervisor.  pooler_pool_sup
 supervises individual pool supervisors (pooler_pooled_worker_sup).
 Each pooler_pooled_worker_sup supervises the members of a pool.
 
-[[./pidq_appmon.jpg]]
+[[./doc/pooler-appmon.jpg]]
 
 
+** Notes
 *** Pool management
 
 It is an error to add a pool with a name that already exists.
@@ -205,44 +198,5 @@ Pool removal has two forms:
 #+END_SRC
 
 
-** Notes
-*** Move pid_starter and pid_stopper to pool config
-This way, you can have pools backed not only by different config, but
-by entirely different services.  Could be useful for testing a new
-client implementation.
-*** Rename something other than "pid"
-*** Consider ets for state storage rather than dict
-
-#+BEGIN_SRC erlang
-pman:start().
-A1 = {riakc_pb_socket, start_link, ["127.0.0.1", 8081]}.
-{ok, S1} = pidq_pool_sup:start_link(A1).
-supervisor:start_child(S1, []).
-
-{ok, S2} = pidq_sup:start_link([]).
-supervisor:start_child(pidq_pool_sup, [A1]).
-
-application:load(pidq).
-C = application:get_all_env(pidq).
-pidq:start(C).
-#+END_SRC
-
-*** supervision strategy
-
-**** pidq_sup
-top-level supervisor watches pidq gen_server and the pidq_pool_sup
-supervisor.
-**** pidq_pool_sup
-A simple_one_for_one supervisor that is used to create/watch
-pidq_pooled_worker_sup supervisor.  You use this to create a new pool
-and specify the M,F,A of the pooled worker at start.
-**** pidq_pooled_worker_sup
-Another simple_one_for_one that is used to create actual workers.
-
-* Rename plan
-genpool, gs_pool, pooler
-pid => worker, member, gs, gspid
-pooler:take_member/0
-pooler:return_member/2
 
 #+OPTIONS: ^:{}

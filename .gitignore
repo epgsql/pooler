@@ -1,4 +1,7 @@
 ebin
 *.beam
-doc
+doc/*.html
 .eunit
+/doc/stylesheet.css
+/doc/erlang.png
+/doc/edoc-info
