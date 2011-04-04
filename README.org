@@ -159,7 +159,7 @@ gen_server and the pooler_pool_sup supervisor.  pooler_pool_sup
 supervises individual pool supervisors (pooler_pooled_worker_sup).
 Each pooler_pooled_worker_sup supervises the members of a pool.
 
-[[./doc/pooler-appmon.jpg]]
+[[doc/pooler-appmon.jpg]]
 
 
 ** Notes
