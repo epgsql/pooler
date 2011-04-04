@@ -1,18 +1,15 @@
--module(pidq_test).
+-module(pooler_test).
 
 -include_lib("eunit/include/eunit.hrl").
 
 -compile([export_all]).
 
-% The `user' processes represent users of the pidq library.  A user
+% The `user' processes represent users of the pooler library.  A user
 % process will take a pid, report details on the pid it has, release
 % and take a new pid, stop cleanly, and crash.
 
 start_user() ->
-    spawn(fun() ->
-                  TC = pidq:take_pid(),
-                  user_loop(TC)
-          end).
+    spawn(fun() -> user_loop(start) end).
 
 user_id(Pid) ->
     Pid ! {get_tc_id, self()},
@@ -30,23 +27,31 @@ user_stop(Pid) ->
 user_crash(Pid) ->
     Pid ! crash.
 
+user_loop(Atom) when Atom =:= error_no_pids orelse Atom =:= start ->
+    user_loop(pooler:take_member());
 user_loop(MyTC) ->
     receive
         {get_tc_id, From} ->
-            From ! get_tc_id(MyTC),
+            From ! pooled_gs:get_id(MyTC),
+            user_loop(MyTC);
+        {ping_tc, From} ->
+            From ! pooled_gs:ping(MyTC),
+            user_loop(MyTC);
+        {ping_count, From} ->
+            From ! pooled_gs:ping_count(MyTC),
             user_loop(MyTC);
         new_tc ->
-            pidq:return_pid(MyTC, ok),
-            MyNewTC = pidq:take_pid(),
+            pooler:return_member(MyTC, ok),
+            MyNewTC = pooler:take_member(),
             user_loop(MyNewTC);
         stop ->
-            pidq:return_pid(MyTC, ok),
+            pooler:return_member(MyTC, ok),
             stopped;
         crash ->
             erlang:error({user_loop, kaboom})
     end.
 
-% The `tc' processes represent the pids tracked by pidq for testing.
+% The `tc' processes represent the pids tracked by pooler for testing.
 % They have a type and an ID and can report their type and ID and
 % stop.
 
@@ -80,52 +85,51 @@ assert_tc_valid(Pid) ->
     ?assertMatch({_Type, _Ref}, get_tc_id(Pid)),
     ok.
 
-tc_sanity_test() ->
-    Pid1 = tc_starter("1"),
-    {"1", Id1} = get_tc_id(Pid1),
-    Pid2 = tc_starter("1"),
-    {"1", Id2} = get_tc_id(Pid2),
-    ?assertNot(Id1 == Id2),
-    stop_tc(Pid1),
-    stop_tc(Pid2).
+% tc_sanity_test() ->
+%     Pid1 = tc_starter("1"),
+%     {"1", Id1} = get_tc_id(Pid1),
+%     Pid2 = tc_starter("1"),
+%     {"1", Id2} = get_tc_id(Pid2),
+%     ?assertNot(Id1 == Id2),
+%     stop_tc(Pid1),
+%     stop_tc(Pid2).
 
-user_sanity_test() ->
-    Pid1 = tc_starter("1"),
-    User = spawn(fun() -> user_loop(Pid1) end),
-    ?assertMatch({"1", _Ref}, user_id(User)),
-    user_crash(User),
-    stop_tc(Pid1).
+% user_sanity_test() ->
+%     Pid1 = tc_starter("1"),
+%     User = spawn(fun() -> user_loop(Pid1) end),
+%     ?assertMatch({"1", _Ref}, user_id(User)),
+%     user_crash(User),
+%     stop_tc(Pid1).
 
-pidq_basics_test_() ->
+pooler_basics_test_() ->
     {foreach,
      % setup
      fun() ->
              Pools = [[{name, "p1"},
-                       {max_pids, 3}, {min_free, 1},
-                       {init_size, 2}, {pid_starter_args, ["type-0"]}]],
-
-             Config = [{pid_starter, {?MODULE, tc_starter}},
-                       {pid_stopper, {?MODULE, stop_tc}},
-                       {pools, Pools}],
-             pidq:start(Config)
+                       {max_count, 3},
+                       {init_count, 2},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-0"}]}}]],
+             application:set_env(pooler, pools, Pools),
+             application:start(pooler)
      end,
      fun(_X) ->
-             pidq:stop()
+             application:stop(pooler)
      end,
      [
       {"take and return one",
        fun() ->
-               P = pidq:take_pid(),
-               ?assertMatch({"type-0", _Id}, get_tc_id(P)),
-               ok = pidq:return_pid(P, ok)
+               P = pooler:take_member(),
+               ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
+               ok = pooler:return_member(P, ok)
        end},
 
       {"pids are created on demand until max",
        fun() ->
-               Pids = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
-               ?assertMatch(error_no_pids, pidq:take_pid()),
-               ?assertMatch(error_no_pids, pidq:take_pid()),
-               PRefs = [ R || {_T, R} <- [ get_tc_id(P) || P <- Pids ] ],
+               Pids = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
+               ?assertMatch(error_no_pids, pooler:take_member()),
+               ?assertMatch(error_no_pids, pooler:take_member()),
+               PRefs = [ R || {_T, R} <- [ pooled_gs:get_id(P) || P <- Pids ] ],
                % no duplicates
                ?assertEqual(length(PRefs), length(lists:usort(PRefs)))
        end
@@ -133,36 +137,36 @@ pidq_basics_test_() ->
 
       {"pids are reused most recent return first",
        fun() ->
-               P1 = pidq:take_pid(),
-               P2 = pidq:take_pid(),
+               P1 = pooler:take_member(),
+               P2 = pooler:take_member(),
                ?assertNot(P1 == P2),
-               ok = pidq:return_pid(P1, ok),
-               ok = pidq:return_pid(P2, ok),
+               ok = pooler:return_member(P1, ok),
+               ok = pooler:return_member(P2, ok),
                % pids are reused most recent first
-               ?assertEqual(P2, pidq:take_pid()),
-               ?assertEqual(P1, pidq:take_pid())
+               ?assertEqual(P2, pooler:take_member()),
+               ?assertEqual(P1, pooler:take_member())
        end},
 
       {"if a pid crashes it is replaced",
        fun() ->
-               Pids0 = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
-               Ids0 = [ get_tc_id(P) || P <- Pids0 ],
+               Pids0 = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
+               Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % crash them all
-               [ P ! crash || P <- Pids0 ],
+               [ pooled_gs:crash(P) || P <- Pids0 ],
                Pids1 = get_n_pids(3, []),
-               Ids1 = [ get_tc_id(P) || P <- Pids1 ],
+               Ids1 = [ pooled_gs:get_id(P) || P <- Pids1 ],
                [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
        end
        },
 
       {"if a pid is returned with bad status it is replaced",
        fun() ->
-               Pids0 = [pidq:take_pid(), pidq:take_pid(), pidq:take_pid()],
-               Ids0 = [ get_tc_id(P) || P <- Pids0 ],
+               Pids0 = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
+               Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % return them all marking as bad
-               [ pidq:return_pid(P, fail) || P <- Pids0 ],
+               [ pooler:return_member(P, fail) || P <- Pids0 ],
                Pids1 = get_n_pids(3, []),
-               Ids1 = [ get_tc_id(P) || P <- Pids1 ],
+               Ids1 = [ pooled_gs:get_id(P) || P <- Pids1 ],
                [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
        end
       },
@@ -171,38 +175,33 @@ pidq_basics_test_() ->
        fun() ->
                Consumer = start_user(),
                StartId = user_id(Consumer),
-               ?debugVal(pidq:pool_stats("p1")),
                user_crash(Consumer),
                NewPid = hd(get_n_pids(1, [])),
-               NewId = get_tc_id(NewPid),
-               ?debugVal(pidq:pool_stats("p1")),
+               NewId = pooled_gs:get_id(NewPid),
                ?assertNot(NewId == StartId)
        end
       }
      ]}.
 
 
-pidq_integration_test_() ->
+pooler_integration_test_() ->
     {foreach,
      % setup
      fun() ->
              Pools = [[{name, "p1"},
-                      {max_pids, 10},
-                      {min_free, 3},
-                      {init_size, 10},
-                      {pid_starter_args, ["type-0"]}]],
-
-             Config = [{pid_starter, {?MODULE, tc_starter}},
-                       {pid_stopper, {?MODULE, stop_tc}},
-                       {pools, Pools}],
-             pidq:start(Config),
+                       {max_count, 10},
+                       {init_count, 10},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-0"}]}}]],
+             application:set_env(pooler, pools, Pools),
+             application:start(pooler),
              Users = [ start_user() || _X <- lists:seq(1, 10) ],
              Users
      end,
      % cleanup
      fun(Users) ->
              [ user_stop(U) || U <- Users ],
-             pidq:stop()
+             application:stop(pooler)
      end,
      %
      [
@@ -212,7 +211,8 @@ pidq_integration_test_() ->
                      TcIds = lists:sort([ user_id(UPid) || UPid <- Users ]),
                      ?assertEqual(lists:usort(TcIds), TcIds)
              end
-      end,
+      end
+      ,
 
       fun(Users) ->
               fun() ->
@@ -242,12 +242,12 @@ pidq_integration_test_() ->
     }.
 
 % testing crash recovery means race conditions when either pids
-% haven't yet crashed or pidq hasn't recovered.  So this helper loops
+% haven't yet crashed or pooler hasn't recovered.  So this helper loops
 % forver until N pids are obtained, ignoring error_no_pids.
 get_n_pids(0, Acc) ->
     Acc;
 get_n_pids(N, Acc) ->
-    case pidq:take_pid() of
+    case pooler:take_member() of
         error_no_pids ->
             get_n_pids(N, Acc);
         Pid ->

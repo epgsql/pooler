@@ -1,0 +1,25 @@
+% -*- mode: erlang -*-
+% pidq app config
+[
+ {pidq, [
+         {pools, [
+                  [{name, "rc8081"},
+                   {max_count, 5},
+                   {init_count, 2},
+                   {start_mfa,
+                    {riakc_pb_socket, start_link, ["localhost", 8081]}}],
+
+                  [{name, "rc8082"},
+                   {max_count, 5},
+                   {init_count, 2},
+                   {start_mfa,
+                    {riakc_pb_socket, start_link, ["localhost", 8082]}}],
+
+                  [{name, "rc8083"},
+                   {max_count, 5},
+                   {init_count, 2},
+                   {start_mfa,
+                    {riakc_pb_socket, start_link, ["localhost", 8083]}}]
+                 ]}
+        ]}
+].

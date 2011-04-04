@@ -1,12 +1,12 @@
-{application, pidq,
+{application, pooler,
  [
   {description, ""},
-  {vsn, "1"},
+  {vsn, git},
   {registered, []},
   {applications, [
                   kernel,
                   stdlib
                  ]},
-  {mod, { pidq_app, []}},
+  {mod, { pooler_app, []}},
   {env, []}
  ]}.
