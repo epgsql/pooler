@@ -15,10 +15,10 @@
 
 -record(state, {
           npools                       :: non_neg_integer(),
-          pools = dict:new()           :: dict:dictionary(),
-          pool_sups = dict:new()       :: dict:dictionary(),
-          in_use_pids = dict:new()     :: dict:dictionary(),
-          consumer_to_pid = dict:new() :: dict:dictionary(),
+          pools = dict:new()           :: dict(),
+          pool_sups = dict:new()       :: dict(),
+          in_use_pids = dict:new()     :: dict(),
+          consumer_to_pid = dict:new() :: dict(),
           pool_selector                :: array()
          }).
 
@@ -62,9 +62,17 @@ start(Config) ->
 stop() ->
     gen_server:call(?SERVER, stop).
 
+%% @doc Obtain exclusive access to a member from a randomly selected pool.
+-spec take_member() -> pid().
 take_member() ->
     gen_server:call(?SERVER, take_member).
 
+%% @doc Return a member to the pool so it can be reused.
+%%
+%% If `Status' is 'ok', the member is returned to the pool.  If
+%% `Status' is 'fail', the member is destroyed and a new member is
+%% added to the pool in its place.
+-spec return_member(pid(), ok | fail) -> ok.
 return_member(Pid, Status) when Status == ok; Status == fail ->
     CPid = self(),
     gen_server:cast(?SERVER, {return_member, Pid, Status, CPid}),
@@ -78,6 +86,8 @@ return_member(Pid, Status) when Status == ok; Status == fail ->
 % add_pool(Pool) ->
 %     gen_server:call(?SERVER, {add_pool, Pool}).
 
+%% @doc Obtain runtime state info for a given pool.
+-spec pool_stats(string()) -> [tuple()].
 pool_stats(Pool) ->
     gen_server:call(?SERVER, {pool_stats, Pool}).
 
