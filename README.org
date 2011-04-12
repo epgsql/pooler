@@ -41,7 +41,7 @@ avoid accessing a given client concurrently.  This is because each
 client is associated with a unique client ID that corresponds to an
 element in an object's vector clock.  Concurrent action from the same
 client ID defeats the vector clock.  For some further explanation,
-see [1] and [2].  Note that concurrent access to Riak's pb client is
+see [[http://lists.basho.com/pipermail/riak-users_lists.basho.com/2010-September/001900.html][post 1]] and [[http://lists.basho.com/pipermail/riak-users_lists.basho.com/2010-September/001904.html][post 2]].  Note that concurrent access to Riak's pb client is
 actual ok as long as you avoid updating the same key at the same
 time.  So the pool needs to have checkout/checkin semantics that give
 consumers exclusive access to a client.
@@ -51,8 +51,6 @@ continue in the face of Riak node failures, consumers should spread
 their requests across clients connected to each node.  The client pool
 provides an easy way to load balance.
 
-[1] http://lists.basho.com/pipermail/riak-users_lists.basho.com/2010-September/001900.html
-[2] http://lists.basho.com/pipermail/riak-users_lists.basho.com/2010-September/001904.html
 
 ** Usage and API
 
@@ -121,82 +119,5 @@ pooler will permanently remove that member from the pool and start a
 new member to replace it.  If your process is short lived, you can
 omit the call to =return_member=.  In this case, pooler will detect
 the normal exit of the consumer and reclaim the member.
-
-** Details
-
-pooler is implemented as a =gen_server=.  Server state consists of:
-
-- A dict of pools keyed by pool name.
-- A dict of pool supervisors keyed by pool name.
-- A dict mapping in-use members to their pool name and the pid of the
-  consumer that is using the member.
-- A dict mapping consumer process pids to the member they are using.
-
-Each pool keeps track of its parameters, such as max member to allow,
-initial members to start, number of members in use, and a list of free
-members.
-
-Since our motivating use-case is Riak's pb client, we opt to reuse a
-given client as much as possible to avoid unnecessary vector clock
-growth; members are taken from the head of the free list and returned
-to the head of the free list.
-
-pooler is a system process and traps exits.  Before giving out a
-member, it links to the requesting consumer process.  This way, if the
-consumer process crashes, pooler can recover the member.  When the
-member is returned, the link to the consumer process will be severed.
-Since the state of the member is unknown in the case of a crashing
-consumer, we will destroy the member and add a fresh one to the pool.
-
-The member starter MFA should use start_link so that pooler will be
-linked to the members.  This way, when members crash, pooler will be
-notified and can refill the pool with new pids.
-
-*** Supervision
-
-The top-level pooler supervisor, pooler_sup, supervises the pooler
-gen_server and the pooler_pool_sup supervisor.  pooler_pool_sup
-supervises individual pool supervisors (pooler_pooled_worker_sup).
-Each pooler_pooled_worker_sup supervises the members of a pool.
-
-[[doc/pooler-appmon.jpg]]
-
-
-** Notes
-*** Pool management
-
-It is an error to add a pool with a name that already exists.
-
-Pool removal has two forms:
-
-- *graceful* pids in the free list are killed (using exit(pid, kill)
-  unless a =pid_stopper= is specified in the pool parameters.  No pids
-  will be handed out from this pool's free list.  As pids are
-  returned, they are shut down.  When the pool is empty, it is
-  removed.
-
-- *immediate* all pids in free and in-use lists are shut down; the
-  pool is removed.
-
-#+BEGIN_SRC erlang
-  -spec(take_member() -> pid()).
-  
-  -spec(return_member(pid(), ok | fail) -> ignore).
-  
-  -spec(status() -> [term()]).
-  
-  -type(pid_type_opt() ::
-        {name, string()} |
-        {max_pids, int()} |
-        {min_free, int()} |
-        {init_size, int()} |
-        {pid_starter_args, [term()]}).
-  
-  -type(pid_type_spec() :: [pid_type_opt()]).
-  -spec(add_type(pid_type_spec()) -> ok | {error, Why}).
-  -spec(remove_type(string()) -> ok | {error, Why}).
-#+END_SRC
-
-
 
 #+OPTIONS: ^:{}
