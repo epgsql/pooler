@@ -318,16 +318,19 @@ remove_pid(Pid, State) ->
 
 -spec max_free_pool(dict()) -> error_no_members | string().
 max_free_pool(Pools) ->
-    Fun = fun(Name, Pool, {CName, CMax}) ->
-                  case Pool#pool.free_count > CMax of
-                      true -> {Name, Pool#pool.free_count};
-                      false -> {CName, CMax}
-                  end
-          end,
-    case dict:fold(Fun, {"", 0}, Pools) of
+    case dict:fold(fun fold_max_free_count/3, {"", 0}, Pools) of
         {"", 0} -> error_no_members;
         {MaxFreePoolName, _} -> MaxFreePoolName
     end.
+
+-spec fold_max_free_count(string(), #pool{}, {string(), non_neg_integer()}) ->
+    {string(), non_neg_integer()}.
+fold_max_free_count(Name, Pool, {CName, CMax}) ->
+    case Pool#pool.free_count > CMax of
+        true -> {Name, Pool#pool.free_count};
+        false -> {CName, CMax}
+    end.
+
 
 -spec start_n_pids(non_neg_integer(), string(), pid(), dict()) ->
     {dict(), [pid()]}.
