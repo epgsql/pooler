@@ -1,13 +1,24 @@
 * pooler dev notes
-** Details
+** Implementation Details
 
-pooler is implemented as a =gen_server=.  Server state consists of:
+pooler is implemented as an OTP application.  Consumers interact with
+the pooler gen_server.  Pools and pool members are managed in a
+supervision tree described below (see [[Supervision]]).
 
+Server state consists of:
+
+- Count of number of pools.
 - A dict of pools keyed by pool name.
 - A dict of pool supervisors keyed by pool name.
-- A dict mapping in-use members to their pool name and the pid of the
-  consumer that is using the member.
+- A dict mapping member pids (across all pools) to ={PoolName, Status,
+  Time}=, where Status is either 'free' or the pid of the consumer
+  process using the member and Time is a timestamp from
+  =os:timestamp/0= that records the time this member was last returned
+  to the pool (this is used to cull inactive members).
 - A dict mapping consumer process pids to the member they are using.
+  A consumer can use more than one member at a time.
+- An array mapping integers to pool names to provide for a convenient
+  way of selecting a random pool.
 
 Each pool keeps track of its parameters, such as max member to allow,
 initial members to start, number of members in use, and a list of free
@@ -28,7 +39,6 @@ consumer, we will destroy the member and add a fresh one to the pool.
 The member starter MFA should use start_link so that pooler will be
 linked to the members.  This way, when members crash, pooler will be
 notified and can refill the pool with new pids.
-
 *** Supervision
 
 The top-level pooler supervisor, pooler_sup, supervises the pooler
@@ -36,9 +46,38 @@ gen_server and the pooler_pool_sup supervisor.  pooler_pool_sup
 supervises individual pool supervisors (pooler_pooled_worker_sup).
 Each pooler_pooled_worker_sup supervises the members of a pool.
 
-[[doc/pooler-appmon.jpg]]
+[[../doc/pooler-appmon.jpg]]
+
+*** Decomissioning pool members when not used
+
+pooler will allocate up to =max_count= members in a pool before
+returning =error_no_members= when take_member is called.  If you set
+max_count to a large value, you may end up with a very large pool
+after a traffic spike.  These members will be culled if unused for
+=cull_after= minutes.
+
+Whenever a member is returned to the pool, either explicitly or
+implicitly via member or consumer exit, a check for inactive members
+will be made if such a check has not been made in =cull_after=
+minutes.  To cull inactive members, all pool members are examined
+using the all_members dict and those that are marked 'free' with a
+timestamp older than =cull_after= minutes will be removed from the
+pool, killed and not replaced.
 
 ** Notes
+*** TODO Add ability to specify a health function for members.
+For riak pb, you should probably call the ping function at start and
+possibly on a schedule to cull bad members.
+*** TODO take_member should try other pools if one is empty
+Or perhaps provide a load-balancing scheme based on choosing the pool
+with the smallest in_use_count (assumes same sized pools).  Could also
+track free count (to avoid length(free_pids)) and pick pool with
+largest free count.
+*** TODO Should we add event logging, stat gather?
+*** TODO Enhance random load balancing
+Would it be better to make a bulk call for randomness and cache it in
+server state rather than calling into the crypto module for each
+take_member call?
 *** Pool management
 
 It is an error to add a pool with a name that already exists.

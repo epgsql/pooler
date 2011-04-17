@@ -27,7 +27,7 @@ user_stop(Pid) ->
 user_crash(Pid) ->
     Pid ! crash.
 
-user_loop(Atom) when Atom =:= error_no_pids orelse Atom =:= start ->
+user_loop(Atom) when Atom =:= error_no_members orelse Atom =:= start ->
     user_loop(pooler:take_member());
 user_loop(MyTC) ->
     receive
@@ -127,8 +127,8 @@ pooler_basics_test_() ->
       {"pids are created on demand until max",
        fun() ->
                Pids = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
-               ?assertMatch(error_no_pids, pooler:take_member()),
-               ?assertMatch(error_no_pids, pooler:take_member()),
+               ?assertMatch(error_no_members, pooler:take_member()),
+               ?assertMatch(error_no_members, pooler:take_member()),
                PRefs = [ R || {_T, R} <- [ pooled_gs:get_id(P) || P <- Pids ] ],
                % no duplicates
                ?assertEqual(length(PRefs), length(lists:usort(PRefs)))
@@ -243,12 +243,12 @@ pooler_integration_test_() ->
 
 % testing crash recovery means race conditions when either pids
 % haven't yet crashed or pooler hasn't recovered.  So this helper loops
-% forver until N pids are obtained, ignoring error_no_pids.
+% forver until N pids are obtained, ignoring error_no_members.
 get_n_pids(0, Acc) ->
     Acc;
 get_n_pids(N, Acc) ->
     case pooler:take_member() of
-        error_no_pids ->
+        error_no_members ->
             get_n_pids(N, Acc);
         Pid ->
             get_n_pids(N - 1, [Pid|Acc])

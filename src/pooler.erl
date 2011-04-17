@@ -17,7 +17,7 @@
           npools                       :: non_neg_integer(),
           pools = dict:new()           :: dict(),
           pool_sups = dict:new()       :: dict(),
-          in_use_pids = dict:new()     :: dict(),
+          all_members = dict:new()     :: dict(),
           consumer_to_pid = dict:new() :: dict(),
           pool_selector                :: array()
          }).
@@ -36,7 +36,7 @@
          return_member/2,
          % remove_pool/2,
          % add_pool/1,
-         pool_stats/1]).
+         pool_stats/0]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -87,9 +87,9 @@ return_member(Pid, Status) when Status == ok; Status == fail ->
 %     gen_server:call(?SERVER, {add_pool, Pool}).
 
 %% @doc Obtain runtime state info for a given pool.
--spec pool_stats(string()) -> [tuple()].
-pool_stats(Pool) ->
-    gen_server:call(?SERVER, {pool_stats, Pool}).
+-spec pool_stats() -> [tuple()].
+pool_stats() ->
+    gen_server:call(?SERVER, pool_stats).
 
 
 %% ------------------------------------------------------------------
@@ -124,38 +124,31 @@ handle_call(take_member, {CPid, _Tag},
     {reply, NewPid, NewState};
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
-handle_call({pool_stats, PoolName}, _From, State) ->
-    Pool = dict:fetch(PoolName, State#state.pools),
-    Stats = [{in_use, dict:fetch_keys(State#state.in_use_pids)},
-             {free, Pool#pool.free_pids}],
-    {reply, Stats, State};
+handle_call(pool_stats, _From, State) ->
+    {reply, dict:to_list(State#state.all_members), State};
 handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
-
-handle_cast({return_member, Pid, Status, CPid}, State) ->
-    {noreply, do_return_member({Pid, Status}, CPid, State)};
+handle_cast({return_member, Pid, Status, _CPid}, State) ->
+    {noreply, do_return_member2(Pid, Status, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({'EXIT', Pid, Reason}, State) ->
-    % error_logger:info_report({got_exit, Pid, Reason}),
     State1 =
-        case dict:find(Pid, State#state.in_use_pids) of
-            {ok, {_PName, CPid}} ->
-                do_return_member({Pid, fail}, CPid, State);
+        case dict:find(Pid, State#state.all_members) of
+            {ok, {_PoolName, _ConsumerPid, _Time}} ->
+                do_return_member2(Pid, fail, State);
             error ->
-                CPMap = State#state.consumer_to_pid,
-                case dict:find(Pid, CPMap) of
+                case dict:find(Pid, State#state.consumer_to_pid) of
                     {ok, Pids} ->
                         IsOk = case Reason of
                                    normal -> ok;
                                    _Crash -> fail
                                end,
                         lists:foldl(
-                          fun(P, S) ->
-                                  do_return_member({P, IsOk}, Pid, S)
-                          end, State, Pids);
+                          fun(P, S) -> do_return_member2(P, IsOk, S) end,
+                          State, Pids);
                     error ->
                         State
                 end
@@ -181,11 +174,12 @@ props_to_pool(P) ->
            start_mfa = ?gv(start_mfa, P)}.
 
 % FIXME: creation of new pids should probably happen
-% in a spawned process to avoid typing up the loop.
+% in a spawned process to avoid tying up the loop.
 add_pids(error, _N, State) ->
     {bad_pool_name, State};
 add_pids(PoolName, N, State) ->
-    #state{pools = Pools, pool_sups = PoolSups} = State,
+    #state{pools = Pools, pool_sups = PoolSups,
+           all_members = AllMembers} = State,
     Pool = dict:fetch(PoolName, Pools),
     #pool{max_count = Max, free_pids = Free, in_use_count = NumInUse} = Pool,
     Total = length(Free) + NumInUse,
@@ -198,64 +192,79 @@ add_pids(PoolName, N, State) ->
                                   erlang:link(Pid),
                                   Pid
                           end, lists:seq(1, N)),
+            AllMembers1 = lists:foldl(
+                            fun(M, Dict) ->
+                                    Time = os:timestamp(),
+                                    dict:store(M, {PoolName, free, Time}, Dict)
+                            end, AllMembers, NewPids),
             Pool1 = Pool#pool{free_pids = Free ++ NewPids},
-            {ok, State#state{pools = dict:store(PoolName, Pool1, Pools)}};
+            {ok, State#state{pools = dict:store(PoolName, Pool1, Pools),
+                             all_members = AllMembers1}};
         false ->
             {max_count_reached, State}
     end.
 
 take_member(PoolName, From, State) ->
-    #state{pools = Pools, in_use_pids = InUse, consumer_to_pid = CPMap} = State,
+    #state{pools = Pools, consumer_to_pid = CPMap} = State,
     Pool = dict:fetch(PoolName, Pools),
     #pool{max_count = Max, free_pids = Free, in_use_count = NumInUse} = Pool,
     case Free of
         [] when NumInUse == Max ->
-            {error_no_pids, State};
+            {error_no_members, State};
         [] when NumInUse < Max ->
             case add_pids(PoolName, 1, State) of
                 {ok, State1} ->
                     take_member(PoolName, From, State1);
                 {max_count_reached, _} ->
-                    {error_no_pids, State}
+                    {error_no_members, State}
             end;
         [Pid|Rest] ->
             erlang:link(From),
             Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1},
             CPMap1 = dict:update(From, fun(O) -> [Pid|O] end, [Pid], CPMap),
+            AllMembers =
+                dict:update(Pid,
+                            fun({PName, free, Time}) -> {PName, From, Time} end,
+                            State#state.all_members),
             {Pid, State#state{pools = dict:store(PoolName, Pool1, Pools),
-                              in_use_pids = dict:store(Pid, {PoolName, From}, InUse),
-                              consumer_to_pid = CPMap1}}
+                              consumer_to_pid = CPMap1,
+                              all_members = AllMembers}}
     end.
 
-do_return_member({Pid, Status}, CPid, State) ->
-    #state{in_use_pids = InUse, pools = Pools,
-           consumer_to_pid = CPMap} = State,
-    case dict:find(Pid, InUse) of
-        {ok, {PoolName, _CPid2}} -> % FIXME, assert that CPid2 == CPid?
-            Pool = dict:fetch(PoolName, Pools),
-            {Pool1, State1} =
-                case Status of
-                    ok -> {add_pid_to_free(Pid, Pool), State};
-                    fail -> handle_failed_pid(Pid, PoolName, Pool, State)
-                    end,
-            State1#state{in_use_pids = dict:erase(Pid, InUse),
-                         pools = dict:store(PoolName, Pool1, Pools),
-                         consumer_to_pid = cpmap_remove(Pid, CPid, CPMap)};
+-spec do_return_member2(pid(), ok | fail, #state{}) -> #state{}.
+do_return_member2(Pid, ok, State = #state{all_members = AllMembers}) ->
+    {PoolName, _CPid, _} = dict:fetch(Pid, AllMembers),
+    Pool = dict:fetch(PoolName, State#state.pools),
+    #pool{free_pids = Free, in_use_count = NumInUse} = Pool,
+    Pool1 = Pool#pool{free_pids = [Pid | Free], in_use_count = NumInUse - 1},
+    State#state{pools = dict:store(PoolName, Pool1, State#state.pools),
+                all_members = dict:store(Pid, {PoolName, free, os:timestamp()},
+                                         AllMembers)};
+do_return_member2(Pid, fail, State = #state{all_members = AllMembers}) ->
+    % for the fail case, perhaps the member crashed and was alerady
+    % removed, so use find instead of fetch and ignore missing.
+    case dict:find(Pid, AllMembers) of
+        {ok, {PoolName, _, _}} ->
+            State1 = remove_pid(Pid, State),
+            {Status, State2} = add_pids(PoolName, 1, State1),
+            case Status =:= ok orelse Status =:= max_count_reached of
+                true ->
+                    State2;
+                false ->
+                    erlang:error({error, "unexpected return from add_pid",
+                                  Status, erlang:get_stacktrace()})
+            end;
         error ->
-            error_logger:warning_report({return_member_not_found, Pid, dict:to_list(InUse)}),
             State
     end.
-
-add_pid_to_free(Pid, Pool) ->
-    #pool{free_pids = Free, in_use_count = NumInUse} = Pool,
-    Pool#pool{free_pids = [Pid|Free], in_use_count = NumInUse - 1}.
-
-handle_failed_pid(Pid, PoolName, Pool, State) ->
-    exit(Pid, kill),
-    {_, NewState} = add_pids(PoolName, 1, State),
-    NumInUse = Pool#pool.in_use_count,
-    {Pool#pool{in_use_count = NumInUse - 1}, NewState}.
-
+    
+% @doc Remove `Pid' from the pid list associated with `CPid' in the
+% consumer to member map given by `CPMap'.
+%
+% If `Pid' is the last element in `CPid's pid list, then the `CPid'
+% entry is removed entirely.
+%
+-spec cpmap_remove(pid(), pid(), dict()) -> dict().
 cpmap_remove(Pid, CPid, CPMap) ->
     case dict:find(CPid, CPMap) of
         {ok, Pids0} ->
@@ -270,4 +279,34 @@ cpmap_remove(Pid, CPid, CPMap) ->
         error ->
             % FIXME: this shouldn't happen, should we log or error?
             CPMap
+    end.
+
+% @doc Remove and kill a pool member.
+%
+% Handles in-use and free members.  Logs an error if the pid is not
+% tracked in state.all_members.
+%
+-spec remove_pid(pid(), #state{}) -> #state{}.
+remove_pid(Pid, State) ->
+    #state{all_members = AllMembers, pools = Pools,
+           consumer_to_pid = CPMap} = State,
+    case dict:find(Pid, AllMembers) of
+        {ok, {PoolName, free, _Time}} ->
+            % remove an unused member
+            Pool = dict:fetch(PoolName, Pools),
+            Pool1 = lists:delete(Pid, Pool#pool.free_pids),
+            exit(Pid, kill),
+            State#state{pools = dict:store(PoolName, Pool1, Pools),
+                        all_members = dict:erase(Pid, AllMembers)};
+        {ok, {PoolName, CPid, _Time}} ->
+            Pool = dict:fetch(PoolName, Pools),
+            Pool1 = Pool#pool{in_use_count = Pool#pool.in_use_count - 1},
+            exit(Pid, kill),
+            State#state{pools = dict:store(PoolName, Pool1, Pools),
+                        consumer_to_pid = cpmap_remove(Pid, CPid, CPMap),
+                        all_members = dict:erase(Pid, AllMembers)};
+        error ->
+            error_logger:error_report({unknown_pid, Pid,
+                                       erlang:get_stacktrace()}),
+            State
     end.
