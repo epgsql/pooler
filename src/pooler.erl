@@ -64,7 +64,12 @@ stop() ->
     gen_server:call(?SERVER, stop).
 
 %% @doc Obtain exclusive access to a member from a randomly selected pool.
--spec take_member() -> pid().
+%%
+%% If there are no free members in the randomly selected pool, then a
+%% member will be returned from the pool with the most free members.
+%% If no free members are available, 'error_no_members' is returned.
+%%
+-spec take_member() -> pid() | error_no_members.
 take_member() ->
     gen_server:call(?SERVER, take_member).
 
@@ -97,6 +102,12 @@ pool_stats() ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 
+-spec init([any()]) -> {'ok', #state{npools::'undefined' | non_neg_integer(),
+                                     pools::dict(),
+                                     pool_sups::dict(),
+                                     all_members::dict(),
+                                     consumer_to_pid::dict(),
+                                     pool_selector::'undefined' | array()}}.
 init(Config) ->
     PoolRecs = [ props_to_pool(P) || P <- ?gv(pools, Config) ],
     Pools = [ {Pool#pool.name, Pool} || Pool <-  PoolRecs ],
@@ -118,11 +129,34 @@ init(Config) ->
     process_flag(trap_exit, true),
     {ok, State}.
 
+-spec handle_call(_, _, _) -> {'noreply','ok',_} |
+                                  {'reply',
+                                   'error_no_members' | pid() | [{_,_}],
+                                   #state{npools::'undefined' | non_neg_integer(),
+                                          pools::dict(),
+                                          pool_sups::dict(),
+                                          all_members::dict(),
+                                          consumer_to_pid::dict(),
+                                          pool_selector::'undefined' | array()}}
+                                  | {'stop','normal','stop_ok', _}.
 handle_call(take_member, {CPid, _Tag},
             State = #state{pool_selector = PS, npools = NP}) ->
+    % attempt to return a member from a randomly selected pool.  If
+    % that pool has no members, find the pool with most free members
+    % and return a member from there.
     PoolName = array:get(crypto:rand_uniform(0, NP), PS),
-    {NewPid, NewState} = take_member(PoolName, CPid, State),
-    {reply, NewPid, NewState};
+    case take_member(PoolName, CPid, State) of
+        {error_no_members, NewState} ->
+            case max_free_pool(State#state.pools) of
+                error_no_members ->
+                    {reply, error_no_members, NewState};
+                MaxFreePoolName ->
+                    {NewPid, State2} = take_member(MaxFreePoolName, CPid, NewState),
+                    {reply, NewPid, State2}
+            end;
+        {NewPid, NewState} ->
+            {reply, NewPid, NewState}
+    end;
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(pool_stats, _From, State) ->
@@ -130,11 +164,13 @@ handle_call(pool_stats, _From, State) ->
 handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
+-spec handle_cast(_,_) -> {'noreply', _}.
 handle_cast({return_member, Pid, Status, _CPid}, State) ->
     {noreply, do_return_member(Pid, Status, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+-spec handle_info(_, _) -> {'noreply', _}.
 handle_info({'EXIT', Pid, Reason}, State) ->
     State1 =
         case dict:find(Pid, State#state.all_members) of
@@ -158,9 +194,11 @@ handle_info({'EXIT', Pid, Reason}, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
+-spec terminate(_, _) -> 'ok'.
 terminate(_Reason, _State) ->
     ok.
 
+-spec code_change(_, _, _) -> {'ok', _}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
