@@ -131,7 +131,7 @@ handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
 handle_cast({return_member, Pid, Status, _CPid}, State) ->
-    {noreply, do_return_member2(Pid, Status, State)};
+    {noreply, do_return_member(Pid, Status, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -139,7 +139,7 @@ handle_info({'EXIT', Pid, Reason}, State) ->
     State1 =
         case dict:find(Pid, State#state.all_members) of
             {ok, {_PoolName, _ConsumerPid, _Time}} ->
-                do_return_member2(Pid, fail, State);
+                do_return_member(Pid, fail, State);
             error ->
                 case dict:find(Pid, State#state.consumer_to_pid) of
                     {ok, Pids} ->
@@ -148,7 +148,7 @@ handle_info({'EXIT', Pid, Reason}, State) ->
                                    _Crash -> fail
                                end,
                         lists:foldl(
-                          fun(P, S) -> do_return_member2(P, IsOk, S) end,
+                          fun(P, S) -> do_return_member(P, IsOk, S) end,
                           State, Pids);
                     error ->
                         State
@@ -234,8 +234,8 @@ take_member(PoolName, From, State) ->
                               all_members = AllMembers}}
     end.
 
--spec do_return_member2(pid(), ok | fail, #state{}) -> #state{}.
-do_return_member2(Pid, ok, State = #state{all_members = AllMembers}) ->
+-spec do_return_member(pid(), ok | fail, #state{}) -> #state{}.
+do_return_member(Pid, ok, State = #state{all_members = AllMembers}) ->
     {PoolName, _CPid, _} = dict:fetch(Pid, AllMembers),
     Pool = dict:fetch(PoolName, State#state.pools),
     #pool{free_pids = Free, in_use_count = NumInUse,
@@ -245,7 +245,7 @@ do_return_member2(Pid, ok, State = #state{all_members = AllMembers}) ->
     State#state{pools = dict:store(PoolName, Pool1, State#state.pools),
                 all_members = dict:store(Pid, {PoolName, free, os:timestamp()},
                                          AllMembers)};
-do_return_member2(Pid, fail, State = #state{all_members = AllMembers}) ->
+do_return_member(Pid, fail, State = #state{all_members = AllMembers}) ->
     % for the fail case, perhaps the member crashed and was alerady
     % removed, so use find instead of fetch and ignore missing.
     case dict:find(Pid, AllMembers) of
