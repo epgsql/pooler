@@ -1,3 +1,13 @@
+%% @author Seth Falcon <seth@userprimary.net>
+%% @copyright 2011 Seth Falcon
+%% @doc This is the main interface to the pooler application
+%%
+%% To integrate with your application, you probably want to call
+%% application:start(pooler) after having specified appropriate
+%% configuration for the pooler application (either via a config file
+%% or appropriate calls to the application module to set the
+%% application's config).
+%%
 -module(pooler).
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
@@ -92,7 +102,9 @@ return_member(Pid, Status) when Status == ok; Status == fail ->
 % add_pool(Pool) ->
 %     gen_server:call(?SERVER, {add_pool, Pool}).
 
-%% @doc Obtain runtime state info for a given pool.
+%% @doc Obtain runtime state info for all pools.
+%%
+%% Format of the return value is subject to change.
 -spec pool_stats() -> [tuple()].
 pool_stats() ->
     gen_server:call(?SERVER, pool_stats).
