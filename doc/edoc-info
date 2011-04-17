@@ -1,0 +1,4 @@
+{application,pooler}.
+{packages,[]}.
+{modules,[pooler,pooler_app,pooler_pool_sup,pooler_pooled_worker_sup,
+          pooler_sup]}.
