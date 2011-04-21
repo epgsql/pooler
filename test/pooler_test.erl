@@ -117,6 +117,12 @@ pooler_basics_test_() ->
              application:stop(pooler)
      end,
      [
+      {"there are init_count members at start",
+       fun() ->
+               Stats = [ P || {P, {_, free, _}} <- pooler:pool_stats() ],
+               ?assertEqual(2, length(Stats))
+       end},
+
       {"take and return one",
        fun() ->
                P = pooler:take_member(),
@@ -147,9 +153,10 @@ pooler_basics_test_() ->
                ?assertEqual(P1, pooler:take_member())
        end},
 
-      {"if a pid crashes it is replaced",
+      {"if an in-use pid crashes it is replaced",
        fun() ->
-               Pids0 = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
+               Pids0 = [pooler:take_member(), pooler:take_member(),
+                        pooler:take_member()],
                Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % crash them all
                [ pooled_gs:crash(P) || P <- Pids0 ],
@@ -158,6 +165,14 @@ pooler_basics_test_() ->
                [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
        end
        },
+
+      {"if a free pid crashes it is replaced",
+       fun() ->
+               FreePids = [ P || {P, {_, free, _}} <- pooler:pool_stats() ],
+               [ exit(P, kill) || P <- FreePids ],
+               Pids1 = get_n_pids(3, []),
+               ?assertEqual(3, length(Pids1))
+       end},
 
       {"if a pid is returned with bad status it is replaced",
        fun() ->
