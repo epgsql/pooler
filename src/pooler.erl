@@ -349,7 +349,9 @@ remove_pid(Pid, State) ->
         {ok, {PoolName, free, _Time}} ->
             % remove an unused member
             Pool = dict:fetch(PoolName, Pools),
-            Pool1 = lists:delete(Pid, Pool#pool.free_pids),
+            FreePids = lists:delete(Pid, Pool#pool.free_pids),
+            NumFree = Pool#pool.free_count - 1,
+            Pool1 = Pool#pool{free_pids = FreePids, free_count = NumFree},
             exit(Pid, kill),
             State#state{pools = dict:store(PoolName, Pool1, Pools),
                         all_members = dict:erase(Pid, AllMembers)};
