@@ -6,25 +6,36 @@ with exclusive access to pool members using pooler:take_member.
 
 ** What pooler does
 
-- Protects the members of a pool from being used concurrently.  The
-  main pooler interface is =pooler:take_member/0= and
-  =pooler:return_member/2=.  The pooler server will keep track of
-  which members are *in use* and which are *free*.  There is no need
-  to call =pooler:return_member= if the consumer is a short-lived
-  process; in this case, pooler will detect the consumer's normal exit
-  and reclaim the member.
+*** Protects the members of a pool from being used concurrently
 
-- Maintains the size of the pool.  You specify an initial and a
-  maximum number of members in the pool.  Pooler will trigger member
-  creation when the free count drops to zero (as long as the in use
-  count is less than the maximum).  New pool members are added to
-  replace member that crash.  If a consumer crashes, the member it was
-  using will be destroyed and replaced.
+The main pooler interface is =pooler:take_member/0= and
+=pooler:return_member/2=.  The pooler server will keep track of which
+members are *in use* and which are *free*.  There is no need to call
+=pooler:return_member= if the consumer is a short-lived process; in
+this case, pooler will detect the consumer's normal exit and reclaim
+the member.  To achieve this, pooler tracks the calling process of
+=take_member= as the consumer of the pool member.  Thus pooler assumes
+that there is no middle-man process calling =take_member= and handing
+out the member pid to another worker process.
 
-- Manage multiple pools.  A common configuration is to have each pool
-  contain client processes connected to a particular node in a cluster
-  (think database read slaves).  By default, pooler will randomly
-  select a pool to fetch a member from.
+*** Maintains the size of the pool
+
+You specify an initial and a maximum number of members in the pool.
+Pooler will create new members on demand until the maximum member
+count is reached.  New pool members are added to replace member that
+crash.  If a consumer crashes, the member it was using will be
+destroyed and replaced.  Pooler will remove members that have not been
+used in =cull_after= minutes.  Culling of members will not reduce a
+pool below the initial size.
+
+*** Manage multiple pools
+
+A common configuration is to have each pool contain client processes
+connected to a particular node in a cluster (think database read
+slaves).  Pooler will randomly select a pool to fetch a member from.
+If the randomly selected pool has no free members, pooler will select
+a member from the pool with the most free members.  If there is no
+pool with available members, pooler will return =error_no_members=.
 
 ** Motivation
 
