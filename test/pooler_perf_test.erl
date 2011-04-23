@@ -1,20 +1,23 @@
--module(pooler_perf).
+-module(pooler_perf_test).
 
 -compile([export_all]).
 -include_lib("eunit/include/eunit.hrl").
 
-setup() ->
+-define(gv(X, L), proplists:get_value(X, L)).
+
+
+setup(InitCount, MaxCount, NumPools) ->
     MakePool = fun(I) ->
                        N = integer_to_list(I),
                        Name = "p" ++ N,
                        Arg0 = "pool-" ++ Name,
                        [{name, Name},
-                        {max_count, 100},
-                        {init_count, 10},
+                        {max_count, MaxCount},
+                        {init_count, InitCount},
                         {start_mfa,
                          {pooled_gs, start_link, [{Arg0}]}}]
                end,
-    Pools = [ MakePool(I) || I <- lists:seq(1, 5) ],
+    Pools = [ MakePool(I) || I <- lists:seq(1, NumPools) ],
     application:set_env(pooler, pools, Pools),
     application:start(pooler).
 
@@ -58,8 +61,8 @@ test2(Iter, Workers) ->
                          gather_pids(Pids)
                  end, []),
     {NumOk, NumFail} = lists:foldr(fun({_, L}, {O, F}) ->
-                                           {O + proplists:get_value(ok, L),
-                                            F + proplists:get_value(fail, L)}
+                                           {O + ?gv(ok, L),
+                                            F + ?gv(fail, L)}
                                    end, {0, 0}, Res),
     {Time, [{ok, NumOk}, {fail, NumFail}]}.
 
@@ -74,4 +77,43 @@ gather_pids([Pid|Rest], Acc) ->
     end;
 gather_pids([], Acc) ->
     Acc.
+
+pooler_take_return_test_() ->
+    {foreach,
+     % setup
+     fun() ->
+             InitCount = 10,
+             MaxCount = 100,
+             NumPools = 5,
+             setup(InitCount, MaxCount, NumPools)
+     end,
+     fun(_X) ->
+             application:stop(pooler)
+     end,
+     [
+      {"take return cycle single worker",
+       fun() ->
+               NumCycles = 10000,
+               Ans = consumer_cycle(NumCycles),
+               ?assertEqual(NumCycles, ?gv(ok, Ans)),
+               ?assertEqual(0, ?gv(fail, Ans))
+       end},
+
+      {"take return cycle multiple workers",
+       fun() ->
+               Self = self(),
+               Iter = 100,
+               Workers = 100,
+               Pids = [ consumer_worker(Iter, Self)
+                        || _I <- lists:seq(1, Workers) ],
+               Res = gather_pids(Pids),
+               {NumOk, NumFail} =
+                   lists:foldr(fun({_, L}, {O, F}) ->
+                                       {O + ?gv(ok, L), F + ?gv(fail, L)}
+                               end, {0, 0}, Res),
+               ?assertEqual(0, NumFail),
+               ?assertEqual(100*100, NumOk)
+       end}
+      ]
+    }.
 
