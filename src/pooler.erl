@@ -286,7 +286,7 @@ take_member(PoolName, From, State) ->
 
 -spec do_return_member(pid(), ok | fail, #state{}) -> #state{}.
 do_return_member(Pid, ok, State = #state{all_members = AllMembers}) ->
-    {PoolName, _CPid, _} = dict:fetch(Pid, AllMembers),
+    {PoolName, CPid, _} = dict:fetch(Pid, AllMembers),
     Pool = dict:fetch(PoolName, State#state.pools),
     #pool{free_pids = Free, in_use_count = NumInUse,
           free_count = NumFree} = Pool,
@@ -294,7 +294,9 @@ do_return_member(Pid, ok, State = #state{all_members = AllMembers}) ->
                       free_count = NumFree + 1},
     State#state{pools = dict:store(PoolName, Pool1, State#state.pools),
                 all_members = dict:store(Pid, {PoolName, free, os:timestamp()},
-                                         AllMembers)};
+                                         AllMembers),
+               consumer_to_pid = cpmap_remove(Pid, CPid,
+                                              State#state.consumer_to_pid)};
 do_return_member(Pid, fail, State = #state{all_members = AllMembers}) ->
     % for the fail case, perhaps the member crashed and was alerady
     % removed, so use find instead of fetch and ignore missing.
@@ -319,7 +321,9 @@ do_return_member(Pid, fail, State = #state{all_members = AllMembers}) ->
 % If `Pid' is the last element in `CPid's pid list, then the `CPid'
 % entry is removed entirely.
 %
--spec cpmap_remove(pid(), pid(), dict()) -> dict().
+-spec cpmap_remove(pid(), pid() | free, dict()) -> dict().
+cpmap_remove(_Pid, free, CPMap) ->
+    CPMap;
 cpmap_remove(Pid, CPid, CPMap) ->
     case dict:find(CPid, CPMap) of
         {ok, Pids0} ->
