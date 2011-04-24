@@ -5,6 +5,8 @@
 
 -define(gv(X, L), proplists:get_value(X, L)).
 
+setup() ->
+    setup(10, 100, 5).
 
 setup(InitCount, MaxCount, NumPools) ->
     MakePool = fun(I) ->
