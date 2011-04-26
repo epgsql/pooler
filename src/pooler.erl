@@ -48,6 +48,7 @@
          stop/0,
          take_member/0,
          return_member/2,
+         use_member/1,
          % remove_pool/2,
          % add_pool/1,
          pool_stats/0,
@@ -97,6 +98,29 @@ return_member(Pid, Status) when Status == ok; Status == fail ->
     CPid = self(),
     gen_server:cast(?SERVER, {return_member, Pid, Status, CPid}),
     ok.
+
+%% @doc Use a member for the duration of a function call.
+%%
+%% Use a member for the duration of a function call and automatically
+%% replace the member to the pool after usage. If `UseFun' throws an
+%% exception is assumed that the member is no longer valid, the
+%% member is returned to the pool with the `Status' flag set to 'fail'
+%% and the exception is returned in the form {exception, Exception}.
+%% If the function succeeds the member is assumed to be valid, is
+%% returned to the pool with the `Status' flag set to 'ok' and the
+%% result is returned directly.
+-spec use_member(fun((pid()) -> any())) -> any() | {exception, any()}.
+use_member(UseFun) ->
+    Member = take_member(),
+    try UseFun(Member) of
+      Result ->
+        return_member(Member, ok),
+        Result
+    catch
+      Exception ->
+        return_member(Member, fail),
+        {exception, Exception}
+    end.
 
 % TODO:
 % remove_pool(Name, How) when How == graceful; How == immediate ->
