@@ -14,6 +14,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-type member_info() :: {string(), free | pid(), {_, _, _}}.
+-type free_member_info() :: {string(), free, {_, _, _}}.
+
 -record(pool, {
           name             :: string(),
           max_count = 100  :: non_neg_integer(),
@@ -47,7 +50,8 @@
          return_member/2,
          % remove_pool/2,
          % add_pool/1,
-         pool_stats/0]).
+         pool_stats/0,
+         cull_pool/2]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -109,6 +113,14 @@ return_member(Pid, Status) when Status == ok; Status == fail ->
 pool_stats() ->
     gen_server:call(?SERVER, pool_stats).
 
+%% @doc Remove members whose last return timestamp is older than
+%% `MaxAgeMin' minutes.
+%%
+%% EXPERIMENTAL
+%%
+-spec cull_pool(string(), non_neg_integer()) -> ok.
+cull_pool(PoolName, MaxAgeMin) ->
+    gen_server:call(?SERVER, {cull_pool, PoolName, MaxAgeMin}).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
@@ -174,6 +186,8 @@ handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(pool_stats, _From, State) ->
     {reply, dict:to_list(State#state.all_members), State};
+handle_call({cull_pool, PoolName, MaxAgeMin}, _From, State) ->
+    {reply, ok, cull_members(PoolName, MaxAgeMin, State)};
 handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
@@ -431,3 +445,32 @@ set_cpid_for_member(MemberPid, CPid, AllMembers) ->
 -spec add_member_to_consumer(pid(), pid(), dict()) -> dict().
 add_member_to_consumer(MemberPid, CPid, CPMap) ->
     dict:update(CPid, fun(O) -> [MemberPid|O] end, [MemberPid], CPMap).
+
+-spec cull_members(string(), non_neg_integer(), #state{}) -> #state{}.
+cull_members(PoolName, MaxAgeMin, State) ->
+    #state{all_members = AllMembers, pools = Pools} = State,
+    Pool = fetch_pool(PoolName, Pools),
+    MaxCull = Pool#pool.free_count - Pool#pool.init_count,
+    case MaxCull > 0 of
+        true ->
+            MemberInfo = member_info(Pool#pool.free_pids, AllMembers),
+            ExpiredMembers =
+                expired_free_members(MemberInfo, os:timestamp(), MaxAgeMin),
+            CullList = lists:sublist(ExpiredMembers, MaxCull),
+            % FIXME: need the member pid, not just pid info
+            lists:foldl(fun({CullMe, _}, S) -> remove_pid(CullMe, S) end,
+                        State, CullList);
+        false ->
+            State
+    end.
+
+-spec member_info([pid()], dict()) -> [{pid(), member_info()}].
+member_info(Pids, AllMembers) ->
+    [ {P, dict:fetch(P, AllMembers)} || P <- Pids ].
+
+-spec expired_free_members([{pid(), member_info()}], {_, _, _},
+                           non_neg_integer()) -> [{pid(), free_member_info()}].
+expired_free_members(Members, Now, MaxAgeMin) ->
+    Micros = 60 * 1000 * 1000,
+    [ MI || MI = {_, {_, free, LastReturn}} <- Members,
+            timer:now_diff(Now, LastReturn) > (MaxAgeMin * Micros) ].
