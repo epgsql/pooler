@@ -111,6 +111,7 @@ pooler_basics_test_() ->
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler)
      end,
      fun(_X) ->
@@ -209,6 +210,7 @@ pooler_integration_test_() ->
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler),
              Users = [ start_user() || _X <- lists:seq(1, 10) ],
              Users
