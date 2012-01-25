@@ -1,4 +1,4 @@
-.PHONY: deps test analyze clean distclean doc
+.PHONY: deps test dialyzer clean distclean doc
 
 all: deps
 	@./rebar compile
@@ -9,8 +9,8 @@ deps:
 test:
 	@./rebar eunit skip_deps=true
 
-analyze:
-	@./rebar analyze skip_deps=true
+dialyzer: all
+	@dialyzer -Wrace_conditions -Wunderspecs -r ebin
 
 doc:
 	@./rebar doc skip_deps=true
