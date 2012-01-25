@@ -133,6 +133,7 @@ cull_pool(PoolName, MaxAgeMin) ->
                                      consumer_to_pid::dict(),
                                      pool_selector::'undefined' | array()}}.
 init(Config) ->
+    process_flag(trap_exit, true),
     PoolRecs = [ props_to_pool(P) || P <- ?gv(pools, Config) ],
     Pools = [ {Pool#pool.name, Pool} || Pool <-  PoolRecs ],
     PoolSups =
@@ -150,7 +151,6 @@ init(Config) ->
                     fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
                             add_pids(PName, N, AccState)
                     end, {ok, State0}, PoolRecs),
-    process_flag(trap_exit, true),
     {ok, State}.
 
 -spec handle_call(_, _, _) -> {'noreply','ok',_} |
