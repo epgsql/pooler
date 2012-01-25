@@ -136,22 +136,18 @@ init(Config) ->
     process_flag(trap_exit, true),
     PoolRecs = [ props_to_pool(P) || P <- ?gv(pools, Config) ],
     Pools = [ {Pool#pool.name, Pool} || Pool <-  PoolRecs ],
-    PoolSups =
-        lists:map(
-          fun(#pool{name = Name, start_mfa = MFA}) ->
+    PoolSups = [ begin
                   {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [MFA]),
                   {Name, SupPid}
-          end, PoolRecs),
+                 end || #pool{name = Name, start_mfa = MFA} <- PoolRecs ],
     State0 = #state{npools = length(Pools),
                     pools = dict:from_list(Pools),
                     pool_sups = dict:from_list(PoolSups),
                     pool_selector = array:from_list([PN || {PN, _} <- Pools])
                   },
-    {ok, State} = lists:foldl(
-                    fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
-                            add_pids(PName, N, AccState)
-                    end, {ok, State0}, PoolRecs),
-    {ok, State}.
+    lists:foldl(fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
+                        add_pids(PName, N, AccState)
+                end, {ok, State0}, PoolRecs).
 
 -spec handle_call(_, _, _) -> {'noreply','ok',_} |
                                   {'reply',
@@ -164,7 +160,7 @@ init(Config) ->
                                           pool_selector::'undefined' | array()}}
                                   | {'stop','normal','stop_ok', _}.
 handle_call(take_member, {CPid, _Tag},
-            State = #state{pool_selector = PS, npools = NP}) ->
+            #state{pool_selector = PS, npools = NP} = State) ->
     % attempt to return a member from a randomly selected pool.  If
     % that pool has no members, find the pool with most free members
     % and return a member from there.
@@ -269,13 +265,12 @@ add_pids(PoolName, N, State) ->
 
 -spec take_member(string(), pid(), #state{}) ->
     {error_no_members | pid(), #state{}}.
-take_member(PoolName, From, State) ->
-    #state{pools = Pools, consumer_to_pid = CPMap} = State,
+take_member(PoolName, From, #state{pools = Pools, consumer_to_pid = CPMap} = State) ->
     Pool = fetch_pool(PoolName, Pools),
     #pool{max_count = Max, free_pids = Free, in_use_count = NumInUse,
           free_count = NumFree} = Pool,
     case Free of
-        [] when NumInUse == Max ->
+        [] when NumInUse =:= Max ->
             {error_no_members, State};
         [] when NumInUse < Max ->
             case add_pids(PoolName, 1, State) of
@@ -297,7 +292,7 @@ take_member(PoolName, From, State) ->
     end.
 
 -spec do_return_member(pid(), ok | fail, #state{}) -> #state{}.
-do_return_member(Pid, ok, State = #state{}) ->
+do_return_member(Pid, ok, #state{} = State) ->
     {PoolName, CPid, _} = dict:fetch(Pid, State#state.all_members),
     Pool = fetch_pool(PoolName, State#state.pools),
     #pool{free_pids = Free, in_use_count = NumInUse,
@@ -310,17 +305,17 @@ do_return_member(Pid, ok, State = #state{}) ->
                                                 State#state.all_members),
                 consumer_to_pid = cpmap_remove(Pid, CPid,
                                                State#state.consumer_to_pid)};
-do_return_member(Pid, fail, State = #state{all_members = AllMembers}) ->
+do_return_member(Pid, fail, #state{all_members = AllMembers} = State) ->
     % for the fail case, perhaps the member crashed and was alerady
     % removed, so use find instead of fetch and ignore missing.
     case dict:find(Pid, AllMembers) of
         {ok, {PoolName, _, _}} ->
             State1 = remove_pid(Pid, State),
-            {Status, State2} = add_pids(PoolName, 1, State1),
-            case Status =:= ok orelse Status =:= max_count_reached of
-                true ->
+            case add_pids(PoolName, 1, State1) of
+                {Status, State2} when Status =:= ok;
+                                      Status =:= max_count_reached ->
                     State2;
-                false ->
+                {Status, _} ->
                     erlang:error({error, "unexpected return from add_pid",
                                   Status, erlang:get_stacktrace()})
             end;
@@ -430,8 +425,7 @@ store_pool(PoolName, Pool = #pool{}, Pools) ->
     dict:store(PoolName, Pool, Pools).
 
 -spec store_all_members(pid(),
-                        {string(), free | pid(), {_, _, _}}, dict()) ->
-    dict().
+                        {string(), free | pid(), {_, _, _}}, dict()) -> dict().
 store_all_members(Pid, Val = {_PoolName, _CPid, _Time}, AllMembers) ->
     dict:store(Pid, Val, AllMembers).
 
