@@ -69,7 +69,7 @@ handle_call(stop, _From, State) ->
 handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
-handle_cast(crash, State) ->
+handle_cast(crash, _State) ->
     erlang:error({pooled_gs, requested_crash});
 handle_cast(_Msg, State) ->
     {noreply, State}.
