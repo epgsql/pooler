@@ -256,10 +256,17 @@ add_pids(PoolName, N, State) ->
             PoolSup = dict:fetch(PoolName, State#state.pool_sups),
             {AllMembers1, NewPids} = start_n_pids(N, PoolName, PoolSup,
                                                   AllMembers),
-            % should we sanity check or take length(Free ++ NewPids)
-            % as free_count?
+            %% start_n_pids may return fewer than N if errors were
+            %% encountered.
+            NewPidCount = length(NewPids),
+            case NewPidCount =:= N of
+                true -> ok;
+                false ->
+                    error_logger:error_msg("tried to add ~B members, only added ~B~n",
+                                           [N, NewPidCount])
+            end,
             Pool1 = Pool#pool{free_pids = Free ++ NewPids,
-                              free_count = NumFree + N},
+                              free_count = length(Free) + NewPidCount},
             {ok, State#state{pools = store_pool(PoolName, Pool1, Pools),
                              all_members = AllMembers1}};
         false ->
@@ -402,14 +409,15 @@ fold_max_free_count(Name, Pool, {CName, CMax}) ->
 -spec start_n_pids(non_neg_integer(), string(), pid(), dict()) ->
     {dict(), [pid()]}.
 start_n_pids(N, PoolName, PoolSup, AllMembers) ->
-    NewPids = lists:map(
-                fun(_I) ->
-                        {ok, Pid} = supervisor:start_child(PoolSup, []),
-                        % FIXME: race condition here if child
-                        % crashes early.
-                        erlang:link(Pid),
-                        Pid
-                end, lists:seq(1, N)),
+    NewPids = do_n(N, fun(Acc) ->
+                              case supervisor:start_child(PoolSup, []) of
+                                  {ok, Pid} ->
+                                      erlang:link(Pid),
+                                      [Pid | Acc];
+                                  _Else ->
+                                      Acc
+                              end
+                      end, []),
     AllMembers1 = lists:foldl(
                     fun(M, Dict) ->
                             Entry = {PoolName, free, os:timestamp()},
@@ -417,6 +425,10 @@ start_n_pids(N, PoolName, PoolSup, AllMembers) ->
                     end, AllMembers, NewPids),
     {AllMembers1, NewPids}.
 
+do_n(0, _Fun, Acc) ->
+    Acc;
+do_n(N, Fun, Acc) ->
+    do_n(N - 1, Fun, Fun(Acc)).
 
 
 -spec fetch_pool(string(), dict()) -> #pool{}.
