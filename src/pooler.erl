@@ -92,10 +92,13 @@ take_member() ->
 %% If `Status' is 'ok', the member is returned to the pool.  If
 %% `Status' is 'fail', the member is destroyed and a new member is
 %% added to the pool in its place.
--spec return_member(pid(), ok | fail) -> ok.
-return_member(Pid, Status) when Status == ok; Status == fail ->
+-spec return_member(pid() | error_no_members, ok | fail) -> ok.
+return_member(Pid, Status) when is_pid(Pid) andalso
+                                (Status =:= ok orelse Status =:= fail) ->
     CPid = self(),
     gen_server:cast(?SERVER, {return_member, Pid, Status, CPid}),
+    ok;
+return_member(error_no_members, _) ->
     ok.
 
 % TODO:
@@ -322,7 +325,7 @@ do_return_member(Pid, fail, #state{all_members = AllMembers} = State) ->
         error ->
             State
     end.
-    
+
 % @doc Remove `Pid' from the pid list associated with `CPid' in the
 % consumer to member map given by `CPMap'.
 %
