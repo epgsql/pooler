@@ -142,7 +142,7 @@ pool_stats() ->
 %% EXPERIMENTAL
 %%
 -spec cull_pool(string(), non_neg_integer()) -> ok.
-cull_pool(PoolName, MaxAgeMin) when MaxAgeMin > 0 ->
+cull_pool(PoolName, MaxAgeMin) when MaxAgeMin >= 0 ->
     gen_server:call(?SERVER, {cull_pool, PoolName, MaxAgeMin}).
 
 %% ------------------------------------------------------------------
@@ -301,15 +301,18 @@ add_pids(PoolName, N, State) ->
 -spec take_member(string(), pid(), #state{}) ->
     {error_no_pool | error_no_members | pid(), #state{}}.
 take_member(PoolName, From, #state{pools = Pools} = State) ->
-    send_metric(pool_metric(PoolName, take_rate), 1, meter),
     take_member_from_pool(fetch_pool(PoolName, Pools), From, State).
 
 take_member_from_pool(error_no_pool, _From, State) ->
     {error_no_pool, State};
-take_member_from_pool(#pool{name = PoolName} = Pool, From,
+take_member_from_pool(#pool{name = PoolName,
+                            max_count = Max,
+                            free_pids = Free,
+                            in_use_count = NumInUse,
+                            free_count = NumFree} = Pool,
+                      From,
                       #state{pools = Pools, consumer_to_pid = CPMap} = State) ->
-    #pool{max_count = Max, free_pids = Free, in_use_count = NumInUse,
-          free_count = NumFree} = Pool,
+    send_metric(pool_metric(PoolName, take_rate), 1, meter),
     case Free of
         [] when NumInUse =:= Max ->
             send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
@@ -505,16 +508,17 @@ cull_members(PoolName, MaxAgeMin, #state{pools = Pools} = State) ->
     cull_members_from_pool(fetch_pool(PoolName, Pools), MaxAgeMin, State).
 
 -spec cull_members_from_pool(#pool{}, non_neg_integer(), #state{}) -> #state{}.
-cull_members_from_pool(#pool{} = Pool, MaxAgeMin,
+cull_members_from_pool(#pool{free_count = FreeCount,
+                             init_count = InitCount,
+                             in_use_count = InUseCount} = Pool, MaxAgeMin,
                        #state{all_members = AllMembers} = State) ->
-    MaxCull = Pool#pool.free_count - Pool#pool.init_count,
+    MaxCull = FreeCount - (InitCount - InUseCount),
     case MaxCull > 0 of
         true ->
             MemberInfo = member_info(Pool#pool.free_pids, AllMembers),
             ExpiredMembers =
                 expired_free_members(MemberInfo, os:timestamp(), MaxAgeMin),
             CullList = lists:sublist(ExpiredMembers, MaxCull),
-            % FIXME: need the member pid, not just pid info
             lists:foldl(fun({CullMe, _}, S) -> remove_pid(CullMe, S) end,
                         State, CullList);
         false ->
@@ -530,7 +534,7 @@ member_info(Pids, AllMembers) ->
 expired_free_members(Members, Now, MaxAgeMin) ->
     Micros = 60 * 1000 * 1000,
     [ MI || MI = {_, {_, free, LastReturn}} <- Members,
-            timer:now_diff(Now, LastReturn) > (MaxAgeMin * Micros) ].
+            timer:now_diff(Now, LastReturn) >= (MaxAgeMin * Micros) ].
 
 
 -spec send_metric(binary(), term(), atom()) -> ok.
@@ -539,7 +543,7 @@ expired_free_members(Members, Now, MaxAgeMin) ->
 send_metric(Name, Value, Type) ->
     case application:get_env(pooler, metrics_module) of
         undefined -> ok;
-        Mod -> Mod:notify(Name, Value, Type)
+        {ok, Mod} -> Mod:notify(Name, Value, Type)
     end,
     ok.
 
