@@ -142,7 +142,7 @@ pool_stats() ->
 %% EXPERIMENTAL
 %%
 -spec cull_pool(string(), non_neg_integer()) -> ok.
-cull_pool(PoolName, MaxAgeMin) ->
+cull_pool(PoolName, MaxAgeMin) when MaxAgeMin > 0 ->
     gen_server:call(?SERVER, {cull_pool, PoolName, MaxAgeMin}).
 
 %% ------------------------------------------------------------------
@@ -299,10 +299,15 @@ add_pids(PoolName, N, State) ->
     end.
 
 -spec take_member(string(), pid(), #state{}) ->
-    {error_no_members | pid(), #state{}}.
-take_member(PoolName, From, #state{pools = Pools, consumer_to_pid = CPMap} = State) ->
+    {error_no_pool | error_no_members | pid(), #state{}}.
+take_member(PoolName, From, #state{pools = Pools} = State) ->
     send_metric(pool_metric(PoolName, take_rate), 1, meter),
-    Pool = fetch_pool(PoolName, Pools),
+    take_member_from_pool(fetch_pool(PoolName, Pools), From, State).
+
+take_member_from_pool(error_no_pool, _From, State) ->
+    {error_no_pool, State};
+take_member_from_pool(#pool{name = PoolName} = Pool, From,
+                      #state{pools = Pools, consumer_to_pid = CPMap} = State) ->
     #pool{max_count = Max, free_pids = Free, in_use_count = NumInUse,
           free_count = NumFree} = Pool,
     case Free of
@@ -470,7 +475,10 @@ do_n(N, Fun, Acc) ->
 
 -spec fetch_pool(string(), dict()) -> #pool{}.
 fetch_pool(PoolName, Pools) ->
-    dict:fetch(PoolName, Pools).
+    case dict:find(PoolName, Pools) of
+        {ok, Pool} -> Pool;
+        error -> error_no_pool
+    end.
 
 -spec store_pool(string(), #pool{}, dict()) -> dict().
 store_pool(PoolName, Pool = #pool{}, Pools) ->
@@ -493,9 +501,12 @@ add_member_to_consumer(MemberPid, CPid, CPMap) ->
     dict:update(CPid, fun(O) -> [MemberPid|O] end, [MemberPid], CPMap).
 
 -spec cull_members(string(), non_neg_integer(), #state{}) -> #state{}.
-cull_members(PoolName, MaxAgeMin, State) ->
-    #state{all_members = AllMembers, pools = Pools} = State,
-    Pool = fetch_pool(PoolName, Pools),
+cull_members(PoolName, MaxAgeMin, #state{pools = Pools} = State) ->
+    cull_members_from_pool(fetch_pool(PoolName, Pools), MaxAgeMin, State).
+
+-spec cull_members_from_pool(#pool{}, non_neg_integer(), #state{}) -> #state{}.
+cull_members_from_pool(#pool{} = Pool, MaxAgeMin,
+                       #state{all_members = AllMembers} = State) ->
     MaxCull = Pool#pool.free_count - Pool#pool.init_count,
     case MaxCull > 0 of
         true ->

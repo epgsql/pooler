@@ -131,6 +131,18 @@ pooler_basics_test_() ->
                ok = pooler:return_member(P, ok)
        end},
 
+      {"take and return one, named pool",
+       fun() ->
+               P = pooler:take_member("p1"),
+               ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
+               ok, pooler:return_member(P)
+       end},
+
+      {"attempt to take form unknown pool",
+       fun() ->
+               ?assertEqual(error_no_pool, pooler:take_member("bad_pool_name"))
+       end},
+
       {"pids are created on demand until max",
        fun() ->
                Pids = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
@@ -196,7 +208,32 @@ pooler_basics_test_() ->
                NewId = pooled_gs:get_id(NewPid),
                ?assertNot(NewId == StartId)
        end
+      },
+
+      {"it is ok to return an unknown pid",
+       fun() ->
+               Bogus1 = spawn(fun() -> ok end),
+               Bogus2 = spawn(fun() -> ok end),
+               ?assertEqual(ok, pooler:return_member(Bogus1, ok)),
+               ?assertEqual(ok, pooler:return_member(Bogus2, fail))
+       end
+      },
+
+      {"calling return_member on error_no_members is ignored",
+       fun() ->
+               ?assertEqual(ok, pooler:return_member(error_no_members)),
+               ?assertEqual(ok, pooler:return_member(error_no_members, ok)),
+               ?assertEqual(ok, pooler:return_member(error_no_members, fail))
+       end
+      },
+
+      {"cull_pool can be called and do nothing",
+       %% FIXME: this exercises the code path, but doesn't test anything
+       fun() ->
+               ?assertEqual(ok, pooler:cull_pool("p1", 10))
+       end
       }
+
      ]}.
 
 
