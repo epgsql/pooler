@@ -48,6 +48,7 @@
          stop/0,
          take_member/0,
          take_member/1,
+         return_member/1,
          return_member/2,
          % remove_pool/2,
          % add_pool/1,
@@ -108,6 +109,16 @@ return_member(Pid, Status) when is_pid(Pid) andalso
     gen_server:cast(?SERVER, {return_member, Pid, Status, CPid}),
     ok;
 return_member(error_no_members, _) ->
+    ok.
+
+%% @doc Return a member to the pool so it can be reused.
+%%
+-spec return_member(pid() | error_no_members) -> ok.
+return_member(Pid) when is_pid(Pid) ->
+    CPid = self(),
+    gen_server:cast(?SERVER, {return_member, Pid, ok, CPid}),
+    ok;
+return_member(error_no_members) ->
     ok.
 
 % TODO:
