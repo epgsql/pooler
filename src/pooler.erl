@@ -47,6 +47,7 @@
          start_link/1,
          stop/0,
          take_member/0,
+         take_member/1,
          return_member/2,
          % remove_pool/2,
          % add_pool/1,
@@ -86,6 +87,14 @@ stop() ->
 -spec take_member() -> pid() | error_no_members.
 take_member() ->
     gen_server:call(?SERVER, take_member).
+
+%% @doc Obtain exclusive access to a member from `PoolName'.
+%%
+%% If no free members are available, 'error_no_members' is returned.
+%%
+-spec take_member(string()) -> pid() | error_no_members.
+take_member(PoolName) when is_list(PoolName) ->
+    gen_server:call(?SERVER, {take_member, PoolName}).
 
 %% @doc Return a member to the pool so it can be reused.
 %%
@@ -181,6 +190,9 @@ handle_call(take_member, {CPid, _Tag},
         {NewPid, NewState} ->
             {reply, NewPid, NewState}
     end;
+handle_call({take_member, PoolName}, {CPid, _Tag}, #state{} = State) ->
+    {Member, NewState} = take_member(PoolName, CPid, State),
+    {reply, Member, NewState};
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(pool_stats, _From, State) ->
