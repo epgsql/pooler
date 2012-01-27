@@ -153,6 +153,30 @@ When enabled, the following metrics will be tracked:
 | pooler.killed_in_use_count    | counter how many members have been killed when in the in_use state          |
 | pooler.event                  | history various error conditions                                            | 
   
+*** Demo Quick Start
+1. Clone the repo:
+: git clone https://github.com/seth/pooler.git
+2. Build and run tests:
+: cd pooler; make && make test
+3. Start a demo
+: erl -pa .eunit ebin -config demo
+:
+: Eshell V5.8.4  (abort with ^G)
+: 1> application:start(pooler).
+: ok
+: 2> M = pooler:take_member().
+: <0.49.0>
+: 3> pooled_gs:get_id(M).
+: {"p2",#Ref<0.0.0.47>}
+: 4> M2 = pooler:take_member().
+: <0.48.0>
+: 5> pooled_gs:get_id(M2).
+: {"p2",#Ref<0.0.0.45>}
+: 6> pooler:return_member(M).
+: ok
+: 7> pooler:return_member(M2).
+: ok
+
 ** License
 Pooler is licensed under the Apache License Version 2.0.  See the
 [[./LICENSE]] file for details.
