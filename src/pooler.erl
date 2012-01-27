@@ -93,7 +93,7 @@ take_member() ->
 %%
 %% If no free members are available, 'error_no_members' is returned.
 %%
--spec take_member(string()) -> pid() | error_no_members.
+-spec take_member(string()) -> pid() | error_no_members | error_no_pool.
 take_member(PoolName) when is_list(PoolName) ->
     gen_server:call(?SERVER, {take_member, PoolName}).
 
@@ -303,6 +303,8 @@ add_pids(PoolName, N, State) ->
 take_member(PoolName, From, #state{pools = Pools} = State) ->
     take_member_from_pool(fetch_pool(PoolName, Pools), From, State).
 
+-spec take_member_from_pool(error_no_pool | #pool{}, {pid(), term()}, #state{}) ->
+                                   {error_no_pool | error_no_members | pid(), #state{}}.
 take_member_from_pool(error_no_pool, _From, State) ->
     {error_no_pool, State};
 take_member_from_pool(#pool{name = PoolName,
