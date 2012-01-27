@@ -476,7 +476,7 @@ do_n(N, Fun, Acc) ->
     do_n(N - 1, Fun, Fun(Acc)).
 
 
--spec fetch_pool(string(), dict()) -> #pool{}.
+-spec fetch_pool(string(), dict()) -> #pool{} | error_no_pool.
 fetch_pool(PoolName, Pools) ->
     case dict:find(PoolName, Pools) of
         {ok, Pool} -> Pool;
@@ -547,7 +547,7 @@ send_metric(Name, Value, Type) ->
     end,
     ok.
 
--spec pool_metric(string(), string() | binary()) -> binary().
+-spec pool_metric(string(), atom()) -> binary().
 pool_metric(PoolName, Metric) ->
     iolist_to_binary([<<"pooler.">>, PoolName, ".",
                       atom_to_binary(Metric, utf8)]).

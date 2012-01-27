@@ -10,7 +10,7 @@ test:
 	@./rebar eunit skip_deps=true
 
 dialyzer: all
-	@dialyzer -Wrace_conditions -Wunderspecs -r ebin
+	@dialyzer -Wrace_conditions -r ebin
 
 doc:
 	@./rebar doc skip_deps=true
