@@ -74,33 +74,37 @@ Pools)=. Here's an example config file that creates three pools of
 Riak pb clients each talking to a different node in a local cluster:
 
 #+BEGIN_SRC erlang
-% pooler.config
-% Start Erlang as: erl -config pooler
-% -*- mode: erlang -*-
-% pooler app config
-[
- {pooler, [
-         {pools, [
-                  [{name, "rc8081"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8081]}}],
-
-                  [{name, "rc8082"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8082]}}],
-
-                  [{name, "rc8083"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8083]}}]
-                 ]}
-        ]}
-].
+  % pooler.config
+  % Start Erlang as: erl -config pooler
+  % -*- mode: erlang -*-
+  % pooler app config
+  [
+   {pooler, [
+           {pools, [
+                    [{name, "rc8081"},
+                     {max_count, 5},
+                     {init_count, 2},
+                     {start_mfa,
+                      {riakc_pb_socket, start_link, ["localhost", 8081]}}],
+  
+                    [{name, "rc8082"},
+                     {max_count, 5},
+                     {init_count, 2},
+                     {start_mfa,
+                      {riakc_pb_socket, start_link, ["localhost", 8082]}}],
+  
+                    [{name, "rc8083"},
+                     {max_count, 5},
+                     {init_count, 2},
+                     {start_mfa,
+                      {riakc_pb_socket, start_link, ["localhost", 8083]}}]
+                   ]}
+             %% if you want to enable metrics, set this to a module with
+             %% an API conformant to the folsom_metrics module.
+             %% If this config is missing, then no metrics are sent.
+             %% {metrics_module, folsom_metrics}
+          ]}
+  ].
 #+END_SRC
 
 Each pool has a unique name, an initial and maximum number of members,
@@ -133,6 +137,22 @@ the normal exit of the consumer and reclaim the member.
 
 #+OPTIONS: ^:{}
 
+*** Metrics
+You can enable metrics collection by adding a =metrics_module= entry
+to pooler's app config. Metrics are disabled by default. The module
+specified must have an API matching that of the [[https://github.com/boundary/folsom/blob/master/src/folsom_metrics.erl][folsom_metrics]] module
+in [[https://github.com/boundary/folsom][folsom]] (to use folsom, specify ={metrics_module, folsom_metrics}}=
+and ensure that folsom is in your code path and has been started. 
+
+When enabled, the following metrics will be tracked:
+
+| Metric Label                  | Description                                                                 |
+| pooler.POOL_NAME.take_rate    | meter recording rate at which take_member is called                         |
+| pooler.error_no_members_count | counter indicating how many times take_member has returned error_no_members |
+| pooler.killed_free_count      | counter how many members have been killed when in the free state            |
+| pooler.killed_in_use_count    | counter how many members have been killed when in the in_use state          |
+| pooler.event                  | history various error conditions                                            | 
+  
 ** License
 Pooler is licensed under the Apache License Version 2.0.  See the
 [[./LICENSE]] file for details.
