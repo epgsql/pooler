@@ -1,3 +1,7 @@
+%% @doc This stub module mimics part of folsom's API. It allows us to
+%% test the metrics instrumentation of pooler without introducing a
+%% dependency on folsom or another metrics application.
+%%
 -module(fake_metrics).
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).

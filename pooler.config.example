@@ -1,25 +1,23 @@
-% -*- mode: erlang -*-
-% pooler app config
+%% -*- mode: erlang -*-
+%% pooler app config example
 [
  {pooler, [
-         {pools, [
-                  [{name, "rc8081"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8081]}}],
-
-                  [{name, "rc8082"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8082]}}],
-
-                  [{name, "rc8083"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8083]}}]
-                 ]}
-        ]}
+           {pools, [
+                    [{name, "pool1"},
+                     {max_count, 5},
+                     {init_count, 2},
+                     {start_mfa,
+                      {pooled_gs, start_link, [{"p1"}]}}],
+                    
+                    [{name, "pool2"},
+                     {max_count, 5},
+                     {init_count, 2},
+                     {start_mfa,
+                      {pooled_gs, start_link, [{"p2"}]}}]
+                   ]}
+           %% if you want to enable metrics, set this to a module with
+           %% an API conformant to the folsom_metrics module.
+           %% If this config is missing, then no metrics are sent.
+           %% {metrics_module, folsom_metrics}
+          ]}
 ].
