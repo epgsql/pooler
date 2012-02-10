@@ -20,8 +20,8 @@ setup(InitCount, MaxCount, NumPools) ->
                          {pooled_gs, start_link, [{Arg0}]}}]
                end,
     Pools = [ MakePool(I) || I <- lists:seq(1, NumPools) ],
-    application:set_env(pooler, pools, Pools),
-    application:start(pooler).
+    ?debugFmt("~n~p~n", [Pools]),
+    pooler_sup:start_link(Pools).
 
 consumer_cycle(N) ->
     consumer_cycle(N, 0, 0).
@@ -90,8 +90,9 @@ pooler_take_return_test_() ->
              error_logger:delete_report_handler(error_logger_tty_h),
              setup(InitCount, MaxCount, NumPools)
      end,
-     fun(_X) ->
-             application:stop(pooler)
+     fun({ok, Pid}) ->
+             erlang:unlink(Pid),
+             exit(Pid, kill)
      end,
      [
       {"take return cycle single worker",

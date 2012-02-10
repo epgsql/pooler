@@ -7,6 +7,5 @@
                   kernel,
                   stdlib
                  ]},
-  {mod, { pooler_app, []}},
   {env, []}
  ]}.

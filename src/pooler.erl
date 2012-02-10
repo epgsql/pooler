@@ -157,7 +157,7 @@ cull_pool(PoolName, MaxAgeMin) when MaxAgeMin >= 0 ->
                                      pool_selector::'undefined' | array()}}.
 init(Config) ->
     process_flag(trap_exit, true),
-    PoolRecs = [ props_to_pool(P) || P <- ?gv(pools, Config) ],
+    PoolRecs = [ props_to_pool(P) || P <- Config],
     Pools = [ {Pool#pool.name, Pool} || Pool <-  PoolRecs ],
     PoolSups = [ begin
                   {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [MFA]),
