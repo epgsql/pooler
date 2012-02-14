@@ -87,6 +87,7 @@ pooler_take_return_test_() ->
              InitCount = 10,
              MaxCount = 100,
              NumPools = 5,
+             error_logger:delete_report_handler(error_logger_tty_h),
              setup(InitCount, MaxCount, NumPools)
      end,
      fun(_X) ->

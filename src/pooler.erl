@@ -47,6 +47,8 @@
          start_link/1,
          stop/0,
          take_member/0,
+         take_member/1,
+         return_member/1,
          return_member/2,
          use_member/1,
          % remove_pool/2,
@@ -88,15 +90,36 @@ stop() ->
 take_member() ->
     gen_server:call(?SERVER, take_member).
 
+%% @doc Obtain exclusive access to a member from `PoolName'.
+%%
+%% If no free members are available, 'error_no_members' is returned.
+%%
+-spec take_member(string()) -> pid() | error_no_members | error_no_pool.
+take_member(PoolName) when is_list(PoolName) ->
+    gen_server:call(?SERVER, {take_member, PoolName}).
+
 %% @doc Return a member to the pool so it can be reused.
 %%
 %% If `Status' is 'ok', the member is returned to the pool.  If
 %% `Status' is 'fail', the member is destroyed and a new member is
 %% added to the pool in its place.
--spec return_member(pid(), ok | fail) -> ok.
-return_member(Pid, Status) when Status == ok; Status == fail ->
+-spec return_member(pid() | error_no_members, ok | fail) -> ok.
+return_member(Pid, Status) when is_pid(Pid) andalso
+                                (Status =:= ok orelse Status =:= fail) ->
     CPid = self(),
     gen_server:cast(?SERVER, {return_member, Pid, Status, CPid}),
+    ok;
+return_member(error_no_members, _) ->
+    ok.
+
+%% @doc Return a member to the pool so it can be reused.
+%%
+-spec return_member(pid() | error_no_members) -> ok.
+return_member(Pid) when is_pid(Pid) ->
+    CPid = self(),
+    gen_server:cast(?SERVER, {return_member, Pid, ok, CPid}),
+    ok;
+return_member(error_no_members) ->
     ok.
 
 %% @doc Use a member for the duration of a function call.
@@ -143,7 +166,7 @@ pool_stats() ->
 %% EXPERIMENTAL
 %%
 -spec cull_pool(string(), non_neg_integer()) -> ok.
-cull_pool(PoolName, MaxAgeMin) ->
+cull_pool(PoolName, MaxAgeMin) when MaxAgeMin >= 0 ->
     gen_server:call(?SERVER, {cull_pool, PoolName, MaxAgeMin}).
 
 %% ------------------------------------------------------------------
@@ -157,25 +180,21 @@ cull_pool(PoolName, MaxAgeMin) ->
                                      consumer_to_pid::dict(),
                                      pool_selector::'undefined' | array()}}.
 init(Config) ->
+    process_flag(trap_exit, true),
     PoolRecs = [ props_to_pool(P) || P <- ?gv(pools, Config) ],
     Pools = [ {Pool#pool.name, Pool} || Pool <-  PoolRecs ],
-    PoolSups =
-        lists:map(
-          fun(#pool{name = Name, start_mfa = MFA}) ->
+    PoolSups = [ begin
                   {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [MFA]),
                   {Name, SupPid}
-          end, PoolRecs),
+                 end || #pool{name = Name, start_mfa = MFA} <- PoolRecs ],
     State0 = #state{npools = length(Pools),
                     pools = dict:from_list(Pools),
                     pool_sups = dict:from_list(PoolSups),
                     pool_selector = array:from_list([PN || {PN, _} <- Pools])
                   },
-    {ok, State} = lists:foldl(
-                    fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
-                            add_pids(PName, N, AccState)
-                    end, {ok, State0}, PoolRecs),
-    process_flag(trap_exit, true),
-    {ok, State}.
+    lists:foldl(fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
+                        add_pids(PName, N, AccState)
+                end, {ok, State0}, PoolRecs).
 
 -spec handle_call(_, _, _) -> {'noreply','ok',_} |
                                   {'reply',
@@ -188,7 +207,7 @@ init(Config) ->
                                           pool_selector::'undefined' | array()}}
                                   | {'stop','normal','stop_ok', _}.
 handle_call(take_member, {CPid, _Tag},
-            State = #state{pool_selector = PS, npools = NP}) ->
+            #state{pool_selector = PS, npools = NP} = State) ->
     % attempt to return a member from a randomly selected pool.  If
     % that pool has no members, find the pool with most free members
     % and return a member from there.
@@ -206,6 +225,9 @@ handle_call(take_member, {CPid, _Tag},
         {NewPid, NewState} ->
             {reply, NewPid, NewState}
     end;
+handle_call({take_member, PoolName}, {CPid, _Tag}, #state{} = State) ->
+    {Member, NewState} = take_member(PoolName, CPid, State),
+    {reply, Member, NewState};
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(pool_stats, _From, State) ->
@@ -281,10 +303,19 @@ add_pids(PoolName, N, State) ->
             PoolSup = dict:fetch(PoolName, State#state.pool_sups),
             {AllMembers1, NewPids} = start_n_pids(N, PoolName, PoolSup,
                                                   AllMembers),
-            % should we sanity check or take length(Free ++ NewPids)
-            % as free_count?
+            %% start_n_pids may return fewer than N if errors were
+            %% encountered.
+            NewPidCount = length(NewPids),
+            case NewPidCount =:= N of
+                true -> ok;
+                false ->
+                    error_logger:error_msg("tried to add ~B members, only added ~B~n",
+                                           [N, NewPidCount]),
+                    send_metric(<<"pooler.events">>,
+                                {add_pids_failed, N, NewPidCount}, history)
+            end,
             Pool1 = Pool#pool{free_pids = Free ++ NewPids,
-                              free_count = NumFree + N},
+                              free_count = length(Free) + NewPidCount},
             {ok, State#state{pools = store_pool(PoolName, Pool1, Pools),
                              all_members = AllMembers1}};
         false ->
@@ -292,26 +323,42 @@ add_pids(PoolName, N, State) ->
     end.
 
 -spec take_member(string(), pid(), #state{}) ->
-    {error_no_members | pid(), #state{}}.
-take_member(PoolName, From, State) ->
-    #state{pools = Pools, consumer_to_pid = CPMap} = State,
-    Pool = fetch_pool(PoolName, Pools),
-    #pool{max_count = Max, free_pids = Free, in_use_count = NumInUse,
-          free_count = NumFree} = Pool,
+    {error_no_pool | error_no_members | pid(), #state{}}.
+take_member(PoolName, From, #state{pools = Pools} = State) ->
+    take_member_from_pool(fetch_pool(PoolName, Pools), From, State).
+
+-spec take_member_from_pool(error_no_pool | #pool{}, {pid(), term()}, #state{}) ->
+                                   {error_no_pool | error_no_members | pid(), #state{}}.
+take_member_from_pool(error_no_pool, _From, State) ->
+    {error_no_pool, State};
+take_member_from_pool(#pool{name = PoolName,
+                            max_count = Max,
+                            free_pids = Free,
+                            in_use_count = NumInUse,
+                            free_count = NumFree} = Pool,
+                      From,
+                      #state{pools = Pools, consumer_to_pid = CPMap} = State) ->
+    send_metric(pool_metric(PoolName, take_rate), 1, meter),
     case Free of
-        [] when NumInUse == Max ->
+        [] when NumInUse =:= Max ->
+            send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
+            send_metric(<<"pooler.events">>, error_no_members, history),
             {error_no_members, State};
         [] when NumInUse < Max ->
             case add_pids(PoolName, 1, State) of
                 {ok, State1} ->
                     take_member(PoolName, From, State1);
                 {max_count_reached, _} ->
+                    send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
+                    send_metric(<<"pooler.events">>, error_no_members, history),
                     {error_no_members, State}
             end;
         [Pid|Rest] ->
             erlang:link(From),
             Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
                               free_count = NumFree - 1},
+            send_metric(pool_metric(PoolName, in_use_count), Pool1#pool.in_use_count, histogram),
+            send_metric(pool_metric(PoolName, free_count), Pool1#pool.free_count, histogram),
             {Pid, State#state{
                     pools = store_pool(PoolName, Pool1, Pools),
                     consumer_to_pid = add_member_to_consumer(Pid, From, CPMap),
@@ -321,7 +368,7 @@ take_member(PoolName, From, State) ->
     end.
 
 -spec do_return_member(pid(), ok | fail, #state{}) -> #state{}.
-do_return_member(Pid, ok, State = #state{}) ->
+do_return_member(Pid, ok, #state{} = State) ->
     {PoolName, CPid, _} = dict:fetch(Pid, State#state.all_members),
     Pool = fetch_pool(PoolName, State#state.pools),
     #pool{free_pids = Free, in_use_count = NumInUse,
@@ -334,24 +381,26 @@ do_return_member(Pid, ok, State = #state{}) ->
                                                 State#state.all_members),
                 consumer_to_pid = cpmap_remove(Pid, CPid,
                                                State#state.consumer_to_pid)};
-do_return_member(Pid, fail, State = #state{all_members = AllMembers}) ->
+do_return_member(Pid, fail, #state{all_members = AllMembers} = State) ->
     % for the fail case, perhaps the member crashed and was alerady
     % removed, so use find instead of fetch and ignore missing.
     case dict:find(Pid, AllMembers) of
         {ok, {PoolName, _, _}} ->
             State1 = remove_pid(Pid, State),
-            {Status, State2} = add_pids(PoolName, 1, State1),
-            case Status =:= ok orelse Status =:= max_count_reached of
-                true ->
+            case add_pids(PoolName, 1, State1) of
+                {Status, State2} when Status =:= ok;
+                                      Status =:= max_count_reached ->
                     State2;
-                false ->
+                {Status, _} ->
                     erlang:error({error, "unexpected return from add_pid",
-                                  Status, erlang:get_stacktrace()})
+                                  Status, erlang:get_stacktrace()}),
+                    send_metric(<<"pooler.events">>, bad_return_from_add_pid,
+                                history)
             end;
         error ->
             State
     end.
-    
+
 % @doc Remove `Pid' from the pid list associated with `CPid' in the
 % consumer to member map given by `CPMap'.
 %
@@ -394,18 +443,21 @@ remove_pid(Pid, State) ->
             NumFree = Pool#pool.free_count - 1,
             Pool1 = Pool#pool{free_pids = FreePids, free_count = NumFree},
             exit(Pid, kill),
+            send_metric(<<"pooler.killed_free_count">>, {inc, 1}, counter),
             State#state{pools = store_pool(PoolName, Pool1, Pools),
                         all_members = dict:erase(Pid, AllMembers)};
         {ok, {PoolName, CPid, _Time}} ->
             Pool = fetch_pool(PoolName, Pools),
             Pool1 = Pool#pool{in_use_count = Pool#pool.in_use_count - 1},
             exit(Pid, kill),
+            send_metric(<<"pooler.killed_in_use_count">>, {inc, 1}, counter),
             State#state{pools = store_pool(PoolName, Pool1, Pools),
                         consumer_to_pid = cpmap_remove(Pid, CPid, CPMap),
                         all_members = dict:erase(Pid, AllMembers)};
         error ->
             error_logger:error_report({unknown_pid, Pid,
                                        erlang:get_stacktrace()}),
+            send_metric(<<"pooler.event">>, unknown_pid, history),
             State
     end.
 
@@ -428,14 +480,15 @@ fold_max_free_count(Name, Pool, {CName, CMax}) ->
 -spec start_n_pids(non_neg_integer(), string(), pid(), dict()) ->
     {dict(), [pid()]}.
 start_n_pids(N, PoolName, PoolSup, AllMembers) ->
-    NewPids = lists:map(
-                fun(_I) ->
-                        {ok, Pid} = supervisor:start_child(PoolSup, []),
-                        % FIXME: race condition here if child
-                        % crashes early.
-                        erlang:link(Pid),
-                        Pid
-                end, lists:seq(1, N)),
+    NewPids = do_n(N, fun(Acc) ->
+                              case supervisor:start_child(PoolSup, []) of
+                                  {ok, Pid} ->
+                                      erlang:link(Pid),
+                                      [Pid | Acc];
+                                  _Else ->
+                                      Acc
+                              end
+                      end, []),
     AllMembers1 = lists:foldl(
                     fun(M, Dict) ->
                             Entry = {PoolName, free, os:timestamp()},
@@ -443,19 +496,25 @@ start_n_pids(N, PoolName, PoolSup, AllMembers) ->
                     end, AllMembers, NewPids),
     {AllMembers1, NewPids}.
 
+do_n(0, _Fun, Acc) ->
+    Acc;
+do_n(N, Fun, Acc) ->
+    do_n(N - 1, Fun, Fun(Acc)).
 
 
--spec fetch_pool(string(), dict()) -> #pool{}.
+-spec fetch_pool(string(), dict()) -> #pool{} | error_no_pool.
 fetch_pool(PoolName, Pools) ->
-    dict:fetch(PoolName, Pools).
+    case dict:find(PoolName, Pools) of
+        {ok, Pool} -> Pool;
+        error -> error_no_pool
+    end.
 
 -spec store_pool(string(), #pool{}, dict()) -> dict().
 store_pool(PoolName, Pool = #pool{}, Pools) ->
     dict:store(PoolName, Pool, Pools).
 
 -spec store_all_members(pid(),
-                        {string(), free | pid(), {_, _, _}}, dict()) ->
-    dict().
+                        {string(), free | pid(), {_, _, _}}, dict()) -> dict().
 store_all_members(Pid, Val = {_PoolName, _CPid, _Time}, AllMembers) ->
     dict:store(Pid, Val, AllMembers).
 
@@ -471,17 +530,21 @@ add_member_to_consumer(MemberPid, CPid, CPMap) ->
     dict:update(CPid, fun(O) -> [MemberPid|O] end, [MemberPid], CPMap).
 
 -spec cull_members(string(), non_neg_integer(), #state{}) -> #state{}.
-cull_members(PoolName, MaxAgeMin, State) ->
-    #state{all_members = AllMembers, pools = Pools} = State,
-    Pool = fetch_pool(PoolName, Pools),
-    MaxCull = Pool#pool.free_count - Pool#pool.init_count,
+cull_members(PoolName, MaxAgeMin, #state{pools = Pools} = State) ->
+    cull_members_from_pool(fetch_pool(PoolName, Pools), MaxAgeMin, State).
+
+-spec cull_members_from_pool(#pool{}, non_neg_integer(), #state{}) -> #state{}.
+cull_members_from_pool(#pool{free_count = FreeCount,
+                             init_count = InitCount,
+                             in_use_count = InUseCount} = Pool, MaxAgeMin,
+                       #state{all_members = AllMembers} = State) ->
+    MaxCull = FreeCount - (InitCount - InUseCount),
     case MaxCull > 0 of
         true ->
             MemberInfo = member_info(Pool#pool.free_pids, AllMembers),
             ExpiredMembers =
                 expired_free_members(MemberInfo, os:timestamp(), MaxAgeMin),
             CullList = lists:sublist(ExpiredMembers, MaxCull),
-            % FIXME: need the member pid, not just pid info
             lists:foldl(fun({CullMe, _}, S) -> remove_pid(CullMe, S) end,
                         State, CullList);
         false ->
@@ -497,4 +560,20 @@ member_info(Pids, AllMembers) ->
 expired_free_members(Members, Now, MaxAgeMin) ->
     Micros = 60 * 1000 * 1000,
     [ MI || MI = {_, {_, free, LastReturn}} <- Members,
-            timer:now_diff(Now, LastReturn) > (MaxAgeMin * Micros) ].
+            timer:now_diff(Now, LastReturn) >= (MaxAgeMin * Micros) ].
+
+
+-spec send_metric(binary(), term(), atom()) -> ok.
+%% Send a metric using the metrics module from application config or
+%% do nothing.
+send_metric(Name, Value, Type) ->
+    case application:get_env(pooler, metrics_module) of
+        undefined -> ok;
+        {ok, Mod} -> Mod:notify(Name, Value, Type)
+    end,
+    ok.
+
+-spec pool_metric(string(), atom()) -> binary().
+pool_metric(PoolName, Metric) ->
+    iolist_to_binary([<<"pooler.">>, PoolName, ".",
+                      atom_to_binary(Metric, utf8)]).

@@ -102,6 +102,14 @@ assert_tc_valid(Pid) ->
 %     stop_tc(Pid1).
 
 pooler_basics_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
     {foreach,
      % setup
      fun() ->
@@ -111,6 +119,7 @@ pooler_basics_test_() ->
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler)
      end,
      fun(_X) ->
@@ -128,6 +137,18 @@ pooler_basics_test_() ->
                P = pooler:take_member(),
                ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
                ok = pooler:return_member(P, ok)
+       end},
+
+      {"take and return one, named pool",
+       fun() ->
+               P = pooler:take_member("p1"),
+               ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
+               ok, pooler:return_member(P)
+       end},
+
+      {"attempt to take form unknown pool",
+       fun() ->
+               ?assertEqual(error_no_pool, pooler:take_member("bad_pool_name"))
        end},
 
       {"pids are created on demand until max",
@@ -195,8 +216,73 @@ pooler_basics_test_() ->
                NewId = pooled_gs:get_id(NewPid),
                ?assertNot(NewId == StartId)
        end
-      }
-     ]}.
+      },
+
+      {"it is ok to return an unknown pid",
+       fun() ->
+               Bogus1 = spawn(fun() -> ok end),
+               Bogus2 = spawn(fun() -> ok end),
+               ?assertEqual(ok, pooler:return_member(Bogus1, ok)),
+               ?assertEqual(ok, pooler:return_member(Bogus2, fail))
+       end
+      },
+
+      {"calling return_member on error_no_members is ignored",
+       fun() ->
+               ?assertEqual(ok, pooler:return_member(error_no_members)),
+               ?assertEqual(ok, pooler:return_member(error_no_members, ok)),
+               ?assertEqual(ok, pooler:return_member(error_no_members, fail))
+       end
+      },
+
+      {"cull_pool can be called and do nothing",
+       %% FIXME: this exercises the code path, but doesn't test anything
+       fun() ->
+               ?assertEqual(ok, pooler:cull_pool("p1", 10))
+       end
+      },
+
+      {"cull_pool culls unused members",
+       fun() ->
+               %% take all
+               [P1, P2, _P3] = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
+               %% return one
+               pooler:return_member(P1),
+               pooler:return_member(P2),
+               %% call a sync action since return_member is async
+               _Ignore = pooler:pool_stats(),
+               ?assertEqual(ok, pooler:cull_pool("p1", 0)),
+               ?assertEqual(2, length(pooler:pool_stats()))
+       end
+      },
+
+      {"metrics have been called",
+       fun() ->
+               %% exercise the API to ensure we have certain keys reported as metrics
+               fake_metrics:reset_metrics(),
+               Pids = [ pooler:take_member() || _I <- lists:seq(1, 10) ],
+               [ pooler:return_member(P) || P <- Pids ],
+               pooler:take_member("bad_pool_name"),
+               %% kill and unused member
+               exit(hd(Pids), kill),
+               %% kill a used member
+               KillMe = pooler:take_member("p1"),
+               exit(KillMe, kill),
+               %% FIXME: We need to wait for pooler to process the
+               %% exit message. This is ugly, will fix later.
+               timer:sleep(200),                % :(
+               ExpectKeys = [<<"pooler.error_no_members_count">>,
+                             <<"pooler.events">>,
+                             <<"pooler.killed_free_count">>,
+                             <<"pooler.killed_in_use_count">>,
+                             <<"pooler.p1.free_count">>,
+                             <<"pooler.p1.in_use_count">>,
+                             <<"pooler.p1.take_rate">>],
+               Metrics = fake_metrics:get_metrics(),
+               GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
+               ?assertEqual(ExpectKeys, GotKeys)
+       end}
+     ]}}.
 
 
 pooler_integration_test_() ->
@@ -209,6 +295,7 @@ pooler_integration_test_() ->
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler),
              Users = [ start_user() || _X <- lists:seq(1, 10) ],
              Users

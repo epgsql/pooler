@@ -1,3 +1,11 @@
+%% @doc A gen_server module that can be pooled by pooler.  This module
+%% is used to test and demo pooler and plays the role of the pooled
+%% member.
+%%
+%% A pooled_gs is started with a `Type' which is intended to help
+%% identify the members for testing multi-pool scenarios. Each
+%% pooled_gs also sets a unique id. The type and id are retrieved
+%% using `get_id/1'.
 -module(pooled_gs).
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
@@ -11,6 +19,7 @@
          ping/1,
          ping_count/1,
          crash/1,
+         do_work/2,
          stop/1
         ]).
 
@@ -29,8 +38,17 @@ start_link(Args ={_Type}) ->
     % not registered
     gen_server:start_link(?MODULE, Args, []).
 
+%% @doc return the type argument passed to this worker at start time
+%% along with this worker's unique id.
 get_id(S) ->
     gen_server:call(S, get_id).
+
+%% @doc In processing this request, the server will sleep for a time
+%% determined by a call to `random:uniform(T)'. Can be useful in
+%% stress-testing the pool to simulate consumers taking a member out
+%% of the pool for a varied request time.
+do_work(S, T) ->
+    gen_server:call(S, {do_work, T}).
 
 ping(S) ->
     gen_server:call(S, ping).
@@ -59,6 +77,10 @@ init({Type}) ->
 
 handle_call(get_id, _From, State) ->
     {reply, {State#state.type, State#state.id}, State};
+handle_call({do_work, T}, _From, State) ->
+    Sleep = random:uniform(T),
+    timer:sleep(Sleep),
+    {reply, {ok, Sleep}, State};
 handle_call(ping, _From, #state{ping_count = C } = State) ->
     State1 = State#state{ping_count = C + 1},
     {reply, pong, State1};
@@ -69,7 +91,7 @@ handle_call(stop, _From, State) ->
 handle_call(_Request, _From, State) ->
     {noreply, ok, State}.
 
-handle_cast(crash, State) ->
+handle_cast(crash, _State) ->
     erlang:error({pooled_gs, requested_crash});
 handle_cast(_Msg, State) ->
     {noreply, State}.
