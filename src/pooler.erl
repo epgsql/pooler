@@ -172,16 +172,6 @@ init(Config) ->
                         add_pids(PName, N, AccState)
                 end, {ok, State0}, PoolRecs).
 
--spec handle_call(_, _, _) -> {'noreply','ok',_} |
-                                  {'reply',
-                                   'error_no_members' | pid() | [{_,_}],
-                                   #state{npools::'undefined' | non_neg_integer(),
-                                          pools::dict(),
-                                          pool_sups::dict(),
-                                          all_members::dict(),
-                                          consumer_to_pid::dict(),
-                                          pool_selector::'undefined' | array()}}
-                                  | {'stop','normal','stop_ok', _}.
 handle_call(take_member, {CPid, _Tag},
             #state{pool_selector = PS, npools = NP} = State) ->
     % attempt to return a member from a randomly selected pool.  If
