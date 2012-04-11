@@ -135,6 +135,19 @@ new member to replace it.  If your process is short lived, you can
 omit the call to =return_member=.  In this case, pooler will detect
 the normal exit of the consumer and reclaim the member.
 
+*** Alternative usage
+
+In many cases the resources within the pool will be used in the fashion
+listed in the previous example. Given that this method is so common, the
+helper function =use_member/1= wraps up this functionality do avoid
+repetitive code.
+
+Example session:
+#+BEGIN_SRC erlang
+application:start(pooler).
+Result = pooler:use_member(fun(P) -> riakc_pb_socket:fetch(P, <<"bucket">>, <<"key">>) end).
+#+END_SRC
+
 #+OPTIONS: ^:{}
 
 *** Metrics
