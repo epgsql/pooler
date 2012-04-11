@@ -528,8 +528,13 @@ expired_free_members(Members, Now, MaxAgeMin) ->
     [ MI || MI = {_, {_, free, LastReturn}} <- Members,
             timer:now_diff(Now, LastReturn) >= (MaxAgeMin * Micros) ].
 
-
--spec send_metric(binary(), term(), atom()) -> ok.
+-spec send_metric(binary(),
+                  'error_no_members' |
+                  'unknown_pid' |
+                  non_neg_integer() |
+                  {'inc',1} |
+                  {'add_pids_failed', non_neg_integer(), non_neg_integer()},
+                  'counter' | 'histogram' | 'history' | 'meter') -> ok.
 %% Send a metric using the metrics module from application config or
 %% do nothing.
 send_metric(Name, Value, Type) ->
@@ -539,7 +544,7 @@ send_metric(Name, Value, Type) ->
     end,
     ok.
 
--spec pool_metric(string(), atom()) -> binary().
+-spec pool_metric(string(), 'free_count' | 'in_use_count' | 'take_rate') -> binary().
 pool_metric(PoolName, Metric) ->
     iolist_to_binary([<<"pooler.">>, PoolName, ".",
                       atom_to_binary(Metric, utf8)]).
