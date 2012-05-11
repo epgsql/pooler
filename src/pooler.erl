@@ -24,7 +24,8 @@
           start_mfa        :: {atom(), atom(), [term()]},
           free_pids = []   :: [pid()],
           in_use_count = 0 :: non_neg_integer(),
-          free_count = 0   :: non_neg_integer()
+          free_count = 0   :: non_neg_integer(),
+          cull_after = 0   :: non_neg_integer()
          }).
 
 -record(state, {
@@ -38,6 +39,7 @@
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
 -define(gv(X, Y, D), proplists:get_value(X, Y, D)).
+-define(ONE_MINUTE_MILLIS, 60000).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
@@ -168,8 +170,9 @@ init(Config) ->
                     pool_sups = dict:from_list(PoolSups),
                     pool_selector = array:from_list([PN || {PN, _} <- Pools])
                   },
-    lists:foldl(fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
-                        add_pids(PName, N, AccState)
+    lists:foldl(fun(#pool{name = PName, init_count = N, cull_after = CullAfter}, {ok, AccState}) ->
+			cull_pool_periodically(PName, CullAfter),
+			add_pids(PName, N, AccState)
                 end, {ok, State0}, PoolRecs).
 
 handle_call(take_member, {CPid, _Tag},
@@ -250,7 +253,8 @@ props_to_pool(P) ->
     #pool{      name = ?gv(name, P),
            max_count = ?gv(max_count, P),
           init_count = ?gv(init_count, P),
-           start_mfa = ?gv(start_mfa, P)}.
+           start_mfa = ?gv(start_mfa, P),
+          cull_after = ?gv(cull_after, P, 0)}.
 
 % FIXME: creation of new pids should probably happen
 % in a spawned process to avoid tying up the loop.
@@ -494,6 +498,25 @@ set_cpid_for_member(MemberPid, CPid, AllMembers) ->
 -spec add_member_to_consumer(pid(), pid(), dict()) -> dict().
 add_member_to_consumer(MemberPid, CPid, CPMap) ->
     dict:update(CPid, fun(O) -> [MemberPid|O] end, [MemberPid], CPMap).
+
+-spec cull_pool_periodically(string(), non_neg_integer()) -> ok | pid().
+cull_pool_periodically(_PoolName, 0) ->
+    ok;
+cull_pool_periodically(PoolName, MaxAgeMin) ->
+    spawn_link(fun() -> do_periodic_cull(PoolName, MaxAgeMin) end).
+
+-spec do_periodic_cull(string(), non_neg_integer()) -> no_return().
+do_periodic_cull(PoolName, MaxAgeMin) ->
+    timer:sleep(MaxAgeMin * ?ONE_MINUTE_MILLIS),
+    try
+	ok = cull_pool(PoolName, MaxAgeMin)
+    catch
+	Error:Reason ->
+	    Stacktrace = erlang:get_stacktrace(),
+	    error_logger:error_msg("Pool cull failed for ~p, {~p, ~p} ~p~n",
+				   [PoolName, Error, Reason, Stacktrace])
+    end,
+    do_periodic_cull(PoolName, MaxAgeMin).
 
 -spec cull_members(string(), non_neg_integer(), #state{}) -> #state{}.
 cull_members(PoolName, MaxAgeMin, #state{pools = Pools} = State) ->
