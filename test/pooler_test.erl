@@ -284,6 +284,26 @@ pooler_basics_test_() ->
        end}
      ]}}.
 
+pooler_limit_failed_adds_test_() ->
+    %% verify that pooler crashes completely if too many failures are
+    %% encountered while trying to add pids.
+    {setup,
+     fun() ->
+             Pools = [[{name, "p1"},
+                       {max_count, 10},
+                       {init_count, 10},
+                       {start_mfa,
+                        {pooled_gs, start_link, [crash]}}]],
+             application:set_env(pooler, pools, Pools)
+     end,
+     fun(_) ->
+             application:stop(pooler)
+     end,
+     fun() ->
+             application:start(pooler),
+             ?assertEqual(error_no_members, pooler:take_member()),
+             ?assertEqual(error_no_members, pooler:take_member("p1"))
+     end}.
 
 random_message_test_() ->
     {setup,
