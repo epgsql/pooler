@@ -11,6 +11,7 @@
 -module(pooler).
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
+-define(DEFAULT_ADD_RETRY, 1).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -24,7 +25,14 @@
           start_mfa        :: {atom(), atom(), [term()]},
           free_pids = []   :: [pid()],
           in_use_count = 0 :: non_neg_integer(),
-          free_count = 0   :: non_neg_integer()
+          free_count = 0   :: non_neg_integer(),
+          %% The number times to attempt adding a pool member if the
+          %% pool size is below max_count and there are no free
+          %% members. After this many tries, error_no_members will be
+          %% returned by a call to take_member. NOTE: this value
+          %% should be >= 2 or else the pool will not grow on demand
+          %% when max_count is larger than init_count.
+          add_member_retry = ?DEFAULT_ADD_RETRY :: non_neg_integer()
          }).
 
 -record(state, {
@@ -250,7 +258,8 @@ props_to_pool(P) ->
     #pool{      name = ?gv(name, P),
            max_count = ?gv(max_count, P),
           init_count = ?gv(init_count, P),
-           start_mfa = ?gv(start_mfa, P)}.
+           start_mfa = ?gv(start_mfa, P),
+ add_member_retry = ?gv(add_member_retry, P, ?DEFAULT_ADD_RETRY)}.
 
 % FIXME: creation of new pids should probably happen
 % in a spawned process to avoid tying up the loop.
@@ -288,14 +297,16 @@ add_pids(PoolName, N, State) ->
             {max_count_reached, State}
     end.
 
--spec take_member(string(), pid(), #state{}) ->
+-spec take_member(string(), {pid(), _}, #state{}) ->
     {error_no_pool | error_no_members | pid(), #state{}}.
 take_member(PoolName, From, #state{pools = Pools} = State) ->
-    take_member_from_pool(fetch_pool(PoolName, Pools), From, State).
+    Pool = fetch_pool(PoolName, Pools),
+    take_member_from_pool(Pool, From, State, pool_add_retries(Pool)).
 
--spec take_member_from_pool(error_no_pool | #pool{}, {pid(), term()}, #state{}) ->
+-spec take_member_from_pool(error_no_pool | #pool{}, {pid(), term()}, #state{},
+                            non_neg_integer()) ->
                                    {error_no_pool | error_no_members | pid(), #state{}}.
-take_member_from_pool(error_no_pool, _From, State) ->
+take_member_from_pool(error_no_pool, _From, State, _) ->
     {error_no_pool, State};
 take_member_from_pool(#pool{name = PoolName,
                             max_count = Max,
@@ -303,22 +314,29 @@ take_member_from_pool(#pool{name = PoolName,
                             in_use_count = NumInUse,
                             free_count = NumFree} = Pool,
                       From,
-                      #state{pools = Pools, consumer_to_pid = CPMap} = State) ->
+                      #state{pools = Pools, consumer_to_pid = CPMap} = State,
+                      Retries) ->
     send_metric(pool_metric(PoolName, take_rate), 1, meter),
     case Free of
         [] when NumInUse =:= Max ->
             send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
             send_metric(<<"pooler.events">>, error_no_members, history),
             {error_no_members, State};
-        [] when NumInUse < Max ->
+        [] when NumInUse < Max andalso Retries > 0 ->
             case add_pids(PoolName, 1, State) of
                 {ok, State1} ->
-                    take_member(PoolName, From, State1);
+                    %% add_pids may have updated our pool
+                    Pool1 = fetch_pool(PoolName, State1#state.pools),
+                    take_member_from_pool(Pool1, From, State1, Retries - 1);
                 {max_count_reached, _} ->
                     send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
                     send_metric(<<"pooler.events">>, error_no_members, history),
                     {error_no_members, State}
             end;
+        [] when Retries =:= 0 ->
+            %% max retries reached
+            send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
+            {error_no_members, State};
         [Pid|Rest] ->
             erlang:link(From),
             Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
@@ -474,6 +492,11 @@ fetch_pool(PoolName, Pools) ->
         {ok, Pool} -> Pool;
         error -> error_no_pool
     end.
+
+pool_add_retries(#pool{add_member_retry = Retries}) ->
+    Retries;
+pool_add_retries(error_no_pool) ->
+    0.
 
 -spec store_pool(string(), #pool{}, dict()) -> dict().
 store_pool(PoolName, Pool = #pool{}, Pools) ->
