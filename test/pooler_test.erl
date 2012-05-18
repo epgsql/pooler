@@ -154,8 +154,8 @@ pooler_basics_test_() ->
       {"pids are created on demand until max",
        fun() ->
                Pids = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
-               ?assertMatch(error_no_members, pooler:take_member()),
-               ?assertMatch(error_no_members, pooler:take_member()),
+               ?assertEqual(error_no_members, pooler:take_member()),
+               ?assertEqual(error_no_members, pooler:take_member()),
                PRefs = [ R || {_T, R} <- [ pooled_gs:get_id(P) || P <- Pids ] ],
                % no duplicates
                ?assertEqual(length(PRefs), length(lists:usort(PRefs)))
