@@ -285,6 +285,35 @@ pooler_basics_test_() ->
      ]}}.
 
 
+random_message_test_() ->
+    {setup,
+     fun() ->
+             Pools = [[{name, "p1"},
+                       {max_count, 2},
+                       {init_count, 1},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-0"}]}}]],
+             application:set_env(pooler, pools, Pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(pooler),
+             %% now send some bogus messages
+             %% do the call in a throw-away process to avoid timeout error
+             spawn(fun() -> catch gen_server:call(pooler, {unexpected_garbage_msg, 5}) end),
+             gen_server:cast(pooler, {unexpected_garbage_msg, 6}),
+            whereis(pooler) ! {unexpected_garbage_msg, 7},
+             ok
+     end,
+     fun(_) ->
+             application:stop(pooler)
+     end,
+    [
+     fun() ->
+             Pid = pooler:take_member("p1"),
+             {Type, _} =  pooled_gs:get_id(Pid),
+             ?assertEqual("type-0", Type)
+     end
+    ]}.
+
 pooler_integration_test_() ->
     {foreach,
      % setup

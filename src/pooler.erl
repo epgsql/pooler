@@ -201,7 +201,7 @@ handle_call(pool_stats, _From, State) ->
 handle_call({cull_pool, PoolName, MaxAgeMin}, _From, State) ->
     {reply, ok, cull_members(PoolName, MaxAgeMin, State)};
 handle_call(_Request, _From, State) ->
-    {noreply, ok, State}.
+    {noreply, State}.
 
 -spec handle_cast(_,_) -> {'noreply', _}.
 handle_cast({return_member, Pid, Status, _CPid}, State) ->
