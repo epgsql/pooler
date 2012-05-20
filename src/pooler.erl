@@ -1,5 +1,5 @@
 %% @author Seth Falcon <seth@userprimary.net>
-%% @copyright 2011 Seth Falcon
+%% @copyright 2011-2012 Seth Falcon
 %% @doc This is the main interface to the pooler application
 %%
 %% To integrate with your application, you probably want to call
@@ -19,6 +19,15 @@
 -type free_member_info() :: {string(), free, {_, _, _}}.
 -type time_unit() :: min | sec | ms | mu.
 -type time_spec() :: {non_neg_integer(), time_unit()}.
+
+%% type specs for pool metrics
+-type metric_label() :: binary().
+-type metric_value() :: 'unknown_pid' |
+                        non_neg_integer() |
+                        {'add_pids_failed', non_neg_integer(), non_neg_integer()} |
+                        {'inc',1} |
+                        'error_no_members'.
+-type metric_type() :: 'counter' | 'histogram' | 'history' | 'meter'.
 
 -record(pool, {
           name             :: string(),
@@ -558,13 +567,9 @@ expired_free_members(Members, Now, MaxAgeMin) ->
     [ MI || MI = {_, {_, free, LastReturn}} <- Members,
             timer:now_diff(Now, LastReturn) >= (MaxAgeMin * Micros) ].
 
--spec send_metric(binary(),
-                  'error_no_members' |
-                  'unknown_pid' |
-                  non_neg_integer() |
-                  {'inc',1} |
-                  {'add_pids_failed', non_neg_integer(), non_neg_integer()},
-                  'counter' | 'histogram' | 'history' | 'meter') -> ok.
+-spec send_metric(Name :: metric_label(),
+                  Value :: metric_value(),
+                  Type :: metric_type()) -> ok.
 %% Send a metric using the metrics module from application config or
 %% do nothing.
 send_metric(Name, Value, Type) ->
