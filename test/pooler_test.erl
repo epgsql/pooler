@@ -392,6 +392,26 @@ pooler_integration_test_() ->
      ]
     }.
 
+time_as_millis_test_() ->
+    Zeros = [ {{0, U}, 0} || U <- [min, sec, ms, mu] ],
+    Ones = [{{1, min}, 60000},
+            {{1, sec}, 1000},
+            {{1, ms}, 1},
+            {{1, mu}, 0}],
+    Misc = [{{3000, mu}, 3}],
+    Tests = Zeros ++ Ones ++ Misc,
+    [ ?_assertEqual(E, pooler:time_as_millis(I)) || {I, E} <- Tests ].
+
+time_as_micros_test_() ->
+    Zeros = [ {{0, U}, 0} || U <- [min, sec, ms, mu] ],
+    Ones = [{{1, min}, 60000000},
+            {{1, sec}, 1000000},
+            {{1, ms}, 1000},
+            {{1, mu}, 1}],
+    Misc = [{{3000, mu}, 3000}],
+    Tests = Zeros ++ Ones ++ Misc,
+    [ ?_assertEqual(E, pooler:time_as_micros(I)) || {I, E} <- Tests ].
+
 % testing crash recovery means race conditions when either pids
 % haven't yet crashed or pooler hasn't recovered.  So this helper loops
 % forver until N pids are obtained, ignoring error_no_members.

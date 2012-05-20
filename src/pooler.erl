@@ -17,6 +17,8 @@
 
 -type member_info() :: {string(), free | pid(), {_, _, _}}.
 -type free_member_info() :: {string(), free, {_, _, _}}.
+-type time_unit() :: min | sec | ms | mu.
+-type time_spec() :: {non_neg_integer(), time_unit()}.
 
 -record(pool, {
           name             :: string(),
@@ -73,6 +75,11 @@
          handle_info/2,
          terminate/2,
          code_change/3]).
+
+%% To help with testing internal functions
+-ifdef(TEST).
+-compile([export_all]).
+-endif.
 
 %% ------------------------------------------------------------------
 %% API Function Definitions
@@ -571,3 +578,19 @@ send_metric(Name, Value, Type) ->
 pool_metric(PoolName, Metric) ->
     iolist_to_binary([<<"pooler.">>, PoolName, ".",
                       atom_to_binary(Metric, utf8)]).
+
+-spec time_as_millis(time_spec()) -> non_neg_integer().
+%% @doc Convert time unit into milliseconds.
+time_as_millis({Time, Unit}) ->
+    time_as_micros({Time, Unit}) div 1000.
+
+-spec time_as_micros(time_spec()) -> non_neg_integer().
+%% @doc Convert time unit into microseconds
+time_as_micros({Time, min}) ->
+    60 * 1000 * 1000 * Time;
+time_as_micros({Time, sec}) ->
+    1000 * 1000 * Time;
+time_as_micros({Time, ms}) ->
+    1000 * Time;
+time_as_micros({Time, mu}) ->
+    Time.
