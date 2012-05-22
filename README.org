@@ -2,7 +2,7 @@
 
 The pooler application allows you to manage pools of OTP behaviors
 such as gen_servers, gen_fsms, or supervisors, and provide consumers
-with exclusive access to pool members using pooler:take_member.
+with exclusive access to pool members using =pooler:take_member=.
 
 ** What pooler does
 
@@ -24,9 +24,9 @@ You specify an initial and a maximum number of members in the pool.
 Pooler will create new members on demand until the maximum member
 count is reached.  New pool members are added to replace member that
 crash.  If a consumer crashes, the member it was using will be
-destroyed and replaced.  Pooler will remove members that have not been
-used in =cull_after= minutes.  Culling of members will not reduce a
-pool below the initial size.
+destroyed and replaced.  You can configure Pooler to periodically
+check for and remove members that have not been used recently using to
+reduce the member count back to its initial size.
 
 *** Manage multiple pools
 
@@ -36,6 +36,11 @@ slaves).  Pooler will randomly select a pool to fetch a member from.
 If the randomly selected pool has no free members, pooler will select
 a member from the pool with the most free members.  If there is no
 pool with available members, pooler will return =error_no_members=.
+
+You can ask for a member from a specified pool using
+=pooler:take_member/1=. If ensure your code always asks for members by
+pool name, you can use pooler to pool clients for different backend
+services.
 
 ** Motivation
 
@@ -62,7 +67,6 @@ continue in the face of Riak node failures, consumers should spread
 their requests across clients connected to each node.  The client pool
 provides an easy way to load balance.
 
-
 ** Usage and API
 
 *** Pool Configuration
@@ -86,13 +90,13 @@ Riak pb clients each talking to a different node in a local cluster:
                      {init_count, 2},
                      {start_mfa,
                       {riakc_pb_socket, start_link, ["localhost", 8081]}}],
-  
+
                     [{name, "rc8082"},
                      {max_count, 5},
                      {init_count, 2},
                      {start_mfa,
                       {riakc_pb_socket, start_link, ["localhost", 8082]}}],
-  
+
                     [{name, "rc8083"},
                      {max_count, 5},
                      {init_count, 2},
@@ -112,6 +116,44 @@ and an ={M, F, A}= describing how to start members of the pool.  When
 pooler starts, it will create members in each pool according to
 =init_count=.
 
+**** Culling stale members
+
+The =cull_interval= and =max_age= pool configuration parameters allow
+you to control how (or if) the pool should be returned to its initial
+size after a traffic burst. Both parameters specify a time value which
+is specified as a tuple with the intended units. The following
+examples are valid:
+
+#+begin_src erlang
+%% two minutes, your way
+{2, min}
+{120, sec}
+{1200, ms}
+#+end_src
+
+The =cull_interval= determines the schedule when a check will be made
+for stale members. Checks are scheduling using =erlang:send_after/3=
+which provides a light-weight timing mechanism. The next check is
+scheduled after the prior check completes.
+
+During a check, pool members that have not been used in more than
+=max_age= minutes will be removed until the pool size reaches
+=init_count=.
+
+The default value for =cull_interval= is ={0, min}= which disables
+stale member checking entirely. The =max_age= parameter has the same
+default value which will cause any members beyond =init_count= to be
+removed if scheduled culling is enabled.
+
+**** Retry behvaior when members do not start
+
+If there are no free members, but the pool size is less than
+=max_count=, pooler will attempt to add a new member to the pool to
+satisfy a =take_member= request. By default, pooler tries a single
+time to add a new member and will return =error_no_members= if this
+fails. You can increase the number of retries by specifying a value
+for the =add_member_retry= configuration parameter.
+
 *** Using pooler
 
 Here's an example session:
@@ -123,8 +165,9 @@ P = pooler:take_member(),
 pooler:return_member(P, ok).
 #+END_SRC
 
-Once started, the main interaction you will have with pooler is through
-two functions, =take_member/0= and =return_member/2=.
+Once started, the main interaction you will have with pooler is
+through two functions, =take_member/0= (or =take_member/1=) and
+=return_member/2= (or =return_member/1=).
 
 Call =pooler:take_member()= to obtain a member from a randomly
 selected pool.  When you are done with it, return it to the pool using
@@ -135,14 +178,49 @@ new member to replace it.  If your process is short lived, you can
 omit the call to =return_member=.  In this case, pooler will detect
 the normal exit of the consumer and reclaim the member.
 
-#+OPTIONS: ^:{}
+*** pooler as an included application
+
+In order for pooler to start properly, all applications required to
+start a pool member must be start before pooler starts. Since pooler
+does not depend on members and since OTP may parallelize application
+starts for applications with no detectable dependencies, this can
+cause problems. One way to work around this is to specify pooler as an
+included application in your app. This means you will call pooler's
+top-level supervisor in your app's top-level supervisor and can regain
+control over the application start order. To do this, you would remove
+pooler from the list of applications in your_app.app add
+it to the included_application key:
+
+#+begin_src erlang
+{application, your_app,
+ [
+  {description, "Your App"},
+  {vsn, "0.1"},
+  {registered, []},
+  {applications, [kernel,
+                  stdlib,
+                  crypto,
+                  mod_xyz]},
+  {included_applications, [pooler]},
+  {mod, {your_app, []}}
+ ]}.
+#+end_src
+
+Then start pooler's top-level supervisor with something like the
+following in your app's top-level supervisor:
+
+#+begin_src erlang
+PoolerSup = {pooler_sup, {pooler_sup, start_link, []},
+             permanent, infinity, supervisor, [pooler_sup]},
+{ok, {{one_for_one, 5, 10}, [PoolerSup]}}.
+#+end_src
 
 *** Metrics
 You can enable metrics collection by adding a =metrics_module= entry
 to pooler's app config. Metrics are disabled by default. The module
 specified must have an API matching that of the [[https://github.com/boundary/folsom/blob/master/src/folsom_metrics.erl][folsom_metrics]] module
 in [[https://github.com/boundary/folsom][folsom]] (to use folsom, specify ={metrics_module, folsom_metrics}}=
-and ensure that folsom is in your code path and has been started. 
+and ensure that folsom is in your code path and has been started.
 
 When enabled, the following metrics will be tracked:
 
@@ -151,32 +229,41 @@ When enabled, the following metrics will be tracked:
 | pooler.error_no_members_count | counter indicating how many times take_member has returned error_no_members |
 | pooler.killed_free_count      | counter how many members have been killed when in the free state            |
 | pooler.killed_in_use_count    | counter how many members have been killed when in the in_use state          |
-| pooler.event                  | history various error conditions                                            | 
-  
+| pooler.event                  | history various error conditions                                            |
+
 *** Demo Quick Start
+
 1. Clone the repo:
-: git clone https://github.com/seth/pooler.git
+   #+begin_example
+git clone https://github.com/seth/pooler.git
+#+end_example
 2. Build and run tests:
-: cd pooler; make && make test
+   #+begin_example
+cd pooler; make && make test
+#+end_example
 3. Start a demo
-: erl -pa .eunit ebin -config demo
-:
-: Eshell V5.8.4  (abort with ^G)
-: 1> application:start(pooler).
-: ok
-: 2> M = pooler:take_member().
-: <0.49.0>
-: 3> pooled_gs:get_id(M).
-: {"p2",#Ref<0.0.0.47>}
-: 4> M2 = pooler:take_member().
-: <0.48.0>
-: 5> pooled_gs:get_id(M2).
-: {"p2",#Ref<0.0.0.45>}
-: 6> pooler:return_member(M).
-: ok
-: 7> pooler:return_member(M2).
-: ok
+   #+begin_example
+erl -pa .eunit ebin -config demo
+
+Eshell V5.8.4  (abort with ^G)
+1> application:start(pooler).
+ok
+2> M = pooler:take_member().
+<0.49.0>
+3> pooled_gs:get_id(M).
+{"p2",#Ref<0.0.0.47>}
+4> M2 = pooler:take_member().
+<0.48.0>
+5> pooled_gs:get_id(M2).
+{"p2",#Ref<0.0.0.45>}
+6> pooler:return_member(M).
+ok
+7> pooler:return_member(M2).
+ok
+#+end_example
 
 ** License
 Pooler is licensed under the Apache License Version 2.0.  See the
-[[./LICENSE]] file for details.
+[[file:LICENSE][LICENSE]] file for details.
+
+#+OPTIONS: ^:{}
