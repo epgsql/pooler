@@ -124,12 +124,12 @@ size after a traffic burst. Both parameters specify a time value which
 is specified as a tuple with the intended units. The following
 examples are valid:
 
-#+begin_src erlang
+#+BEGIN_SRC erlang
 %% two minutes, your way
 {2, min}
 {120, sec}
 {1200, ms}
-#+end_src
+#+END_SRC
 
 The =cull_interval= determines the schedule when a check will be made
 for stale members. Checks are scheduling using =erlang:send_after/3=
@@ -191,7 +191,7 @@ control over the application start order. To do this, you would remove
 pooler from the list of applications in your_app.app add
 it to the included_application key:
 
-#+begin_src erlang
+#+BEGIN_SRC erlang
 {application, your_app,
  [
   {description, "Your App"},
@@ -204,16 +204,16 @@ it to the included_application key:
   {included_applications, [pooler]},
   {mod, {your_app, []}}
  ]}.
-#+end_src
+#+END_SRC
 
 Then start pooler's top-level supervisor with something like the
 following in your app's top-level supervisor:
 
-#+begin_src erlang
+#+BEGIN_SRC erlang
 PoolerSup = {pooler_sup, {pooler_sup, start_link, []},
              permanent, infinity, supervisor, [pooler_sup]},
 {ok, {{one_for_one, 5, 10}, [PoolerSup]}}.
-#+end_src
+#+END_SRC
 
 *** Metrics
 You can enable metrics collection by adding a =metrics_module= entry
@@ -234,33 +234,33 @@ When enabled, the following metrics will be tracked:
 *** Demo Quick Start
 
 1. Clone the repo:
-   #+begin_example
-git clone https://github.com/seth/pooler.git
-#+end_example
+   #+BEGIN_EXAMPLE
+   git clone https://github.com/seth/pooler.git
+   #+END_EXAMPLE
 2. Build and run tests:
-   #+begin_example
-cd pooler; make && make test
-#+end_example
+   #+BEGIN_EXAMPLE
+   cd pooler; make && make test
+   #+END_EXAMPLE
 3. Start a demo
-   #+begin_example
-erl -pa .eunit ebin -config demo
+   #+BEGIN_EXAMPLE
+   erl -pa .eunit ebin -config demo
 
-Eshell V5.8.4  (abort with ^G)
-1> application:start(pooler).
-ok
-2> M = pooler:take_member().
-<0.49.0>
-3> pooled_gs:get_id(M).
-{"p2",#Ref<0.0.0.47>}
-4> M2 = pooler:take_member().
-<0.48.0>
-5> pooled_gs:get_id(M2).
-{"p2",#Ref<0.0.0.45>}
-6> pooler:return_member(M).
-ok
-7> pooler:return_member(M2).
-ok
-#+end_example
+   Eshell V5.8.4  (abort with ^G)
+   1> application:start(pooler).
+   ok
+   2> M = pooler:take_member().
+   <0.49.0>
+   3> pooled_gs:get_id(M).
+   {"p2",#Ref<0.0.0.47>}
+   4> M2 = pooler:take_member().
+   <0.48.0>
+   5> pooled_gs:get_id(M2).
+   {"p2",#Ref<0.0.0.45>}
+   6> pooler:return_member(M).
+   ok
+   7> pooler:return_member(M2).
+   ok
+   #+END_EXAMPLE
 
 ** License
 Pooler is licensed under the Apache License Version 2.0.  See the
