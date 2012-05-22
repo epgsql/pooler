@@ -235,27 +235,6 @@ pooler_basics_test_() ->
        end
       },
 
-      {"cull_pool can be called and do nothing",
-       %% FIXME: this exercises the code path, but doesn't test anything
-       fun() ->
-               ?assertEqual(ok, pooler:cull_pool("p1", 10))
-       end
-      },
-
-      {"cull_pool culls unused members",
-       fun() ->
-               %% take all
-               [P1, P2, _P3] = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
-               %% return one
-               pooler:return_member(P1),
-               pooler:return_member(P2),
-               %% call a sync action since return_member is async
-               _Ignore = pooler:pool_stats(),
-               ?assertEqual(ok, pooler:cull_pool("p1", 0)),
-               ?assertEqual(2, length(pooler:pool_stats()))
-       end
-      },
-
       {"metrics have been called",
        fun() ->
                %% exercise the API to ensure we have certain keys reported as metrics
@@ -304,6 +283,69 @@ pooler_limit_failed_adds_test_() ->
              ?assertEqual(error_no_members, pooler:take_member()),
              ?assertEqual(error_no_members, pooler:take_member("p1"))
      end}.
+
+pooler_scheduled_cull_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link(),
+             Pools = [[{name, "p1"},
+                       {max_count, 10},
+                       {init_count, 2},
+                       {start_mfa, {pooled_gs, start_link, [{"type-0"}]}},
+                       {cull_interval, {200, ms}}]],
+             application:set_env(pooler, pools, Pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(pooler)
+     end,
+     fun(_X) ->
+             fake_metrics:stop(),
+             application:stop(pooler)
+     end,
+     [{"excess members are culled repeatedly",
+       fun() ->
+               %% take all members
+               Pids1 = [ pooler:take_member("p1") || _X <- lists:seq(1, 10) ],
+               %% return all
+               [ pooler:return_member(P) || P <- Pids1 ],
+               ?assertEqual(10, length(pooler:pool_stats())),
+               %% wait for longer than cull delay
+               timer:sleep(250),
+               ?assertEqual(2, length(pooler:pool_stats())),
+
+               %% repeat the test to verify that culling gets rescheduled.
+               Pids2 = [ pooler:take_member("p1") || _X <- lists:seq(1, 10) ],
+               %% return all
+               [ pooler:return_member(P) || P <- Pids2 ],
+               ?assertEqual(10, length(pooler:pool_stats())),
+               %% wait for longer than cull delay
+               timer:sleep(250),
+               ?assertEqual(2, length(pooler:pool_stats()))
+       end
+      },
+
+      {"non-excess members are not culled",
+       fun() ->
+               [P1, P2] = [pooler:take_member("p1") || _X <- [1, 2] ],
+               [pooler:return_member(P) || P <- [P1, P2] ],
+               ?assertEqual(2, length(pooler:pool_stats())),
+               timer:sleep(250),
+               ?assertEqual(2, length(pooler:pool_stats()))
+       end
+      },
+
+      {"in-use members are not culled",
+       fun() ->
+               %% take all members
+               Pids = [ pooler:take_member("p1") || _X <- lists:seq(1, 10) ],
+               %% don't return any
+               ?assertEqual(10, length(pooler:pool_stats())),
+               %% wait for longer than cull delay
+               timer:sleep(250),
+               ?assertEqual(10, length(pooler:pool_stats())),
+               [ pooler:return_member(P) || P <- Pids ]
+       end}
+     ]}.
 
 random_message_test_() ->
     {setup,
@@ -391,6 +433,26 @@ pooler_integration_test_() ->
       end
      ]
     }.
+
+time_as_millis_test_() ->
+    Zeros = [ {{0, U}, 0} || U <- [min, sec, ms, mu] ],
+    Ones = [{{1, min}, 60000},
+            {{1, sec}, 1000},
+            {{1, ms}, 1},
+            {{1, mu}, 0}],
+    Misc = [{{3000, mu}, 3}],
+    Tests = Zeros ++ Ones ++ Misc,
+    [ ?_assertEqual(E, pooler:time_as_millis(I)) || {I, E} <- Tests ].
+
+time_as_micros_test_() ->
+    Zeros = [ {{0, U}, 0} || U <- [min, sec, ms, mu] ],
+    Ones = [{{1, min}, 60000000},
+            {{1, sec}, 1000000},
+            {{1, ms}, 1000},
+            {{1, mu}, 1}],
+    Misc = [{{3000, mu}, 3000}],
+    Tests = Zeros ++ Ones ++ Misc,
+    [ ?_assertEqual(E, pooler:time_as_micros(I)) || {I, E} <- Tests ].
 
 % testing crash recovery means race conditions when either pids
 % haven't yet crashed or pooler hasn't recovered.  So this helper loops
