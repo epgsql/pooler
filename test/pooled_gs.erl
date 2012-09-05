@@ -61,6 +61,7 @@ crash(S) ->
     sent_crash_request.
 
 stop(S) ->
+    error_logger:info("Stopping pooled worker."),
     gen_server:call(S, stop).
 
 %% ------------------------------------------------------------------
@@ -73,6 +74,9 @@ stop(S) ->
          }).
 
 init({Type}) ->
+    Sleep = crypto:rand_uniform(20, 30),
+    %%error_logger:info_msg("Starting pooled resource... sleeping ~w ms.", [Sleep]),
+    timer:sleep(Sleep),
     {ok, #state{type = Type, id = make_ref()}}.
 
 handle_call(get_id, _From, State) ->

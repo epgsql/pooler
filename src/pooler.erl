@@ -208,6 +208,8 @@ handle_call(take_member, {CPid, _Tag},
         {error_no_members, NewState} ->
             case max_free_pool(State#state.pools) of
                 error_no_members ->
+                    error_logger:info_msg([io_lib:format("Worker checkout failed~n", [])
+                                          |pool_status_string(State)]),
                     {reply, error_no_members, NewState};
                 MaxFreePoolName ->
                     {NewPid, State2} = take_member(MaxFreePoolName, CPid,
@@ -625,3 +627,79 @@ time_as_micros({Time, ms}) ->
     1000 * Time;
 time_as_micros({Time, mu}) ->
     Time.
+
+%% @doc Pool worker status.
+%% Returns list of proplist with attributes
+%% id, name, capacity, created, checkedout, free, available
+%%
+pool_status(#state{pools=Pools} = _State) ->
+    Ids = dict:fetch_keys(Pools),
+    [pool_status(Id, dict:fetch(Id, Pools)) || Id <- Ids].
+pool_status(Id, #pool{max_count=MaxCount,
+                      free_count=Free,
+                      in_use_count=CheckedOut} = _Pool) ->
+    Capacity = MaxCount,
+    Created = CheckedOut + Free,
+    Available = Capacity - CheckedOut,
+    [{id, Id},
+     {capacity, Capacity},
+     {created, Created},
+     {checkedout, CheckedOut},
+     {free, Free},
+     {available, Available}].
+
+%% @doc Returns a formatted string with pool status.
+%% Includes a header and total line.
+pool_status_string(#state{} = State) ->
+    StatusList = pool_status(State),
+    [pool_header_string()|
+         [pool_status_string(Status) || Status <- StatusList]]
+      ++ [pool_status_string(pool_status_total(StatusList))];
+pool_status_string(PoolStatus) ->
+    [{id, Id},
+     {capacity, Capacity},
+     {created, Created},
+     {checkedout, CheckedOut},
+     {free, Free},
+     {available, Available}] = PoolStatus,
+    io_lib:format("~-6s ~10w ~10w ~10w ~10w ~10w~n",
+           [Id, Capacity, Created, CheckedOut, Free, Available]).
+
+%% Returns a pool status proplist with special id "Total"
+%% with totals for capacity, created, checkedout, free, available.
+pool_status_total(PoolStatusList) ->
+    [TotalCapacity,
+     TotalCreated,
+     TotalCheckedOut,
+     TotalFree,
+     TotalAvailable] = sum_attributes(PoolStatusList,
+        [capacity, created, checkedout, free, available]),
+    [{id, "Total"},
+     {capacity, TotalCapacity},
+     {created, TotalCreated},
+     {checkedout, TotalCheckedOut},
+     {free, TotalFree},
+     {available, TotalAvailable}].
+
+pool_header_string() ->
+    io_lib:format("~-6s ~10s ~10s ~10s ~10s ~10s~n",
+        ["Id", "Capacity", "Created", "CheckedOut", "Free", "Available"]).
+
+%% @doc Transpose proplists, i.e.
+%%
+%% 1> transpose([[{a, 1}, {b, 2}], [{a, 3}, {b, 4}]]).
+%% [{a,[1, 3]},{b,[2,4]}]
+%%
+transpose(PropLists) ->
+    Flattened = lists:flatten(PropLists),
+    [{Key, proplists:get_all_values(Key, Flattened)}
+     || Key <- proplists:get_keys(Flattened)].
+
+%% @doc Return list of sum of each attribute
+%%
+%% 1> sum_attributes([[{a, 1}, {b, 2}], [{a, 3}, {b, 4}]], [a, b]).
+%% [4,6]
+%%
+sum_attributes(PropLists, Attributes) ->
+    Transposed = transpose(PropLists),
+    [lists:sum(proplists:get_value(Key, Transposed, [])) || Key <- Attributes].
