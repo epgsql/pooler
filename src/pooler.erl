@@ -198,27 +198,9 @@ init(Config) ->
                         add_pids(PName, N, AccState1)
                 end, {ok, State0}, PoolRecs).
 
-handle_call(take_member, {CPid, _Tag},
-            #state{pool_selector = PS, npools = NP} = State) ->
-    % attempt to return a member from a randomly selected pool.  If
-    % that pool has no members, find the pool with most free members
-    % and return a member from there.
-    PoolName = array:get(crypto:rand_uniform(0, NP), PS),
-    case take_member(PoolName, CPid, State) of
-        {error_no_members, NewState} ->
-            case max_free_pool(State#state.pools) of
-                error_no_members ->
-                    error_logger:info_msg([io_lib:format("Worker checkout failed~n", [])
-                                          |pool_status_string(State)]),
-                    {reply, error_no_members, NewState};
-                MaxFreePoolName ->
-                    {NewPid, State2} = take_member(MaxFreePoolName, CPid,
-                                                   NewState),
-                    {reply, NewPid, State2}
-            end;
-        {NewPid, NewState} ->
-            {reply, NewPid, NewState}
-    end;
+handle_call(take_member, {CPid, _Tag}, State) ->
+    {Result, NewState} =  pick_member(CPid, State),
+    {reply, Result, NewState};
 handle_call({take_member, PoolName}, {CPid, _Tag}, #state{} = State) ->
     {Member, NewState} = take_member(PoolName, CPid, State),
     {reply, Member, NewState};
@@ -318,6 +300,53 @@ add_pids(PoolName, N, State) ->
         false ->
             {max_count_reached, State}
     end.
+
+-define(PICK_STRATEGIES, [random, free, available]).
+
+%% @doc Pick a pool member and check it out.
+%% Tries several strategies to pick the pool:
+%%
+%% 1. random
+%% 2. max free members
+%% 3. max available members
+%%
+%% Returns {Result, NewState}.
+%% Result is pid of pool member checked out, or
+%% error_no_pool, or error_no_members.
+%%
+-spec pick_member(pid(), #state{}) ->
+    {error_no_pool | error_no_members | pid(), #state{}}.
+pick_member(From, State) ->
+    pick_member(From, State, ?PICK_STRATEGIES).
+pick_member(_From, State, []) ->
+    error_logger:info_msg([io_lib:format("Worker checkout failed~n", [])
+                          |pool_status_string(State)]),
+    {error_no_members, State};
+pick_member(From, State, [Strategy|Strategies]) ->
+    case pick_pool(State, Strategy) of
+        error_no_members ->
+            pick_member(From, State, Strategies);
+        PoolName ->
+            case take_member(PoolName, From, State) of
+                {error_no_members, NewState} ->
+                    pick_member(From, NewState, Strategies);
+                Other ->
+                    Other
+            end
+    end.
+
+%% @doc Pick a pool according to given strategy
+%% Returns a pool name or error_no_members or error_no_pool.
+-spec pick_pool(#state{}, random|free|available) ->
+          error_no_member|error_no_pools|string().
+pick_pool(#state{pools=[]}=_State, _Strategy) ->
+    error_no_pool;
+pick_pool(#state{pool_selector = PS, npools = NP}=_State, random) ->
+    array:get(crypto:rand_uniform(0, NP), PS);
+pick_pool(#state{pools=Pools}=_State, free) ->
+    max_free_pool(Pools);
+pick_pool(#state{pools=Pools}=_State, available) ->
+    max_avail_pool(Pools).
 
 -spec take_member(string(), {pid(), _}, #state{}) ->
     {error_no_pool | error_no_members | pid(), #state{}}.
@@ -482,6 +511,22 @@ fold_max_free_count(Name, Pool, {CName, CMax}) ->
         false -> {CName, CMax}
     end.
 
+%% @doc Returns pool with the most available members.
+-spec max_avail_pool(dict()) -> error_no_members | string().
+max_avail_pool(Pools) ->
+    case dict:fold(fun fold_max_avail_count/3, {"", 0}, Pools) of
+        {"", 0} -> error_no_members;
+        {MaxAvailPoolName, _} -> MaxAvailPoolName
+    end.
+
+-spec fold_max_avail_count(string(), #pool{}, {string(), non_neg_integer()}) ->
+    {string(), non_neg_integer()}.
+fold_max_avail_count(Name, Pool, {CName, CMax}) ->
+    Available = Pool#pool.max_count - Pool#pool.in_use_count,
+    case Available > CMax of
+        true -> {Name, Available};
+        false -> {CName, CMax}
+    end.
 
 -spec start_n_pids(non_neg_integer(), string(), pid(), dict()) ->
     {dict(), [pid()]}.
