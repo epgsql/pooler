@@ -82,7 +82,7 @@ init({Type}) ->
 handle_call(get_id, _From, State) ->
     {reply, {State#state.type, State#state.id}, State};
 handle_call({do_work, T}, _From, State) ->
-    Sleep = random:uniform(T),
+    Sleep = crypto:rand_uniform(5, T+5),
     timer:sleep(Sleep),
     {reply, {ok, Sleep}, State};
 handle_call(ping, _From, #state{ping_count = C } = State) ->
