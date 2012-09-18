@@ -318,9 +318,8 @@ add_pids(PoolName, N, State) ->
     {error_no_pool | error_no_members | pid(), #state{}}.
 pick_member(From, State) ->
     pick_member(From, State, ?PICK_STRATEGIES).
+
 pick_member(_From, State, []) ->
-    error_logger:info_msg([io_lib:format("Worker checkout failed~n", [])
-                          |pool_status_string(State)]),
     {error_no_members, State};
 pick_member(From, State, [Strategy|Strategies]) ->
     case pick_pool(State, Strategy) of
