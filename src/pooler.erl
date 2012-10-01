@@ -120,7 +120,7 @@ stop() ->
 %%
 -spec take_member() -> pid() | error_no_members.
 take_member() ->
-    gen_server:call(?SERVER, take_member).
+    gen_server:call(?SERVER, take_member, infinity).
 
 %% @doc Obtain exclusive access to a member from `PoolName'.
 %%
@@ -128,7 +128,7 @@ take_member() ->
 %%
 -spec take_member(string()) -> pid() | error_no_members | error_no_pool.
 take_member(PoolName) when is_list(PoolName) ->
-    gen_server:call(?SERVER, {take_member, PoolName}).
+    gen_server:call(?SERVER, {take_member, PoolName}, infinity).
 
 %% @doc Return a member to the pool so it can be reused.
 %%
@@ -138,8 +138,7 @@ take_member(PoolName) when is_list(PoolName) ->
 -spec return_member(pid() | error_no_members, ok | fail) -> ok.
 return_member(Pid, Status) when is_pid(Pid) andalso
                                 (Status =:= ok orelse Status =:= fail) ->
-    CPid = self(),
-    gen_server:cast(?SERVER, {return_member, Pid, Status, CPid}),
+    gen_server:call(?SERVER, {return_member, Pid, Status}, infinity),
     ok;
 return_member(error_no_members, _) ->
     ok.
@@ -148,8 +147,7 @@ return_member(error_no_members, _) ->
 %%
 -spec return_member(pid() | error_no_members) -> ok.
 return_member(Pid) when is_pid(Pid) ->
-    CPid = self(),
-    gen_server:cast(?SERVER, {return_member, Pid, ok, CPid}),
+    gen_server:call(?SERVER, {return_member, Pid, ok}, infinity),
     ok;
 return_member(error_no_members) ->
     ok.
@@ -220,6 +218,8 @@ handle_call(take_member, {CPid, _Tag},
 handle_call({take_member, PoolName}, {CPid, _Tag}, #state{} = State) ->
     {Member, NewState} = take_member(PoolName, CPid, State),
     {reply, Member, NewState};
+handle_call({return_member, Pid, Status}, {CPid, _Tag}, State) ->
+    {reply, ok, do_return_member(Pid, Status, State)};
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(pool_stats, _From, State) ->
@@ -228,8 +228,6 @@ handle_call(_Request, _From, State) ->
     {noreply, State}.
 
 -spec handle_cast(_,_) -> {'noreply', _}.
-handle_cast({return_member, Pid, Status, _CPid}, State) ->
-    {noreply, do_return_member(Pid, Status, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
