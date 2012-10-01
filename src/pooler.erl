@@ -370,19 +370,22 @@ take_member_from_pool(#pool{name = PoolName,
     end.
 
 -spec do_return_member(pid(), ok | fail, #state{}) -> #state{}.
-do_return_member(Pid, ok, #state{} = State) ->
-    {PoolName, CPid, _} = dict:fetch(Pid, State#state.all_members),
-    Pool = fetch_pool(PoolName, State#state.pools),
-    #pool{free_pids = Free, in_use_count = NumInUse,
-          free_count = NumFree} = Pool,
-    Pool1 = Pool#pool{free_pids = [Pid | Free], in_use_count = NumInUse - 1,
-                      free_count = NumFree + 1},
-    Entry = {PoolName, free, os:timestamp()},
-    State#state{pools = store_pool(PoolName, Pool1, State#state.pools),
-                all_members = store_all_members(Pid, Entry,
-                                                State#state.all_members),
-                consumer_to_pid = cpmap_remove(Pid, CPid,
-                                               State#state.consumer_to_pid)};
+do_return_member(Pid, ok, #state{all_members = AllMembers} = State) ->
+    case dict:find(Pid, AllMembers) of
+        {ok, {PoolName, CPid, _}} ->
+            Pool = fetch_pool(PoolName, State#state.pools),
+            #pool{free_pids = Free, in_use_count = NumInUse,
+                  free_count = NumFree} = Pool,
+            Pool1 = Pool#pool{free_pids = [Pid | Free], in_use_count = NumInUse - 1,
+                              free_count = NumFree + 1},
+            Entry = {PoolName, free, os:timestamp()},
+            State#state{pools = store_pool(PoolName, Pool1, State#state.pools),
+                        all_members = store_all_members(Pid, Entry, AllMembers),
+                        consumer_to_pid = cpmap_remove(Pid, CPid,
+                                                       State#state.consumer_to_pid)};
+        error ->
+            State
+    end;
 do_return_member(Pid, fail, #state{all_members = AllMembers} = State) ->
     % for the fail case, perhaps the member crashed and was alerady
     % removed, so use find instead of fetch and ignore missing.
