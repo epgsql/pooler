@@ -218,7 +218,7 @@ handle_call(take_member, {CPid, _Tag},
 handle_call({take_member, PoolName}, {CPid, _Tag}, #state{} = State) ->
     {Member, NewState} = take_member(PoolName, CPid, State),
     {reply, Member, NewState};
-handle_call({return_member, Pid, Status}, {CPid, _Tag}, State) ->
+handle_call({return_member, Pid, Status}, {_CPid, _Tag}, State) ->
     {reply, ok, do_return_member(Pid, Status, State)};
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
