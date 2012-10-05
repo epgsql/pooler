@@ -492,8 +492,31 @@ pooler_addpool_test_() ->
                ?assertEqual(ok, Result),
                Result2 = pooler:addpool(PoolConfig),
                ?assertEqual({error, duplicate_pool_name}, Result2)
+       end},
+      
+      {"can add multiple pools",
+       fun() ->
+               PoolConfigs = [
+                              [{name, "p3"},
+                               {max_count, 3},
+                               {init_count, 2},
+                               {start_mfa,
+                                 {pooled_gs, start_link, [{"type-2"}]}}],
+                              [{name, "p4"},
+                               {max_count, 3},
+                               {init_count, 2},
+                               {start_mfa,
+                                 {pooled_gs, start_link, [{"type-3"}]}}]
+                             ],
+               Result = pooler:addpools(PoolConfigs),
+               ?assertEqual(ok, Result),
+               P3 = pooler:take_member("p3"),
+               ?assertMatch({"type-2", _Id}, pooled_gs:get_id(P3)),
+               P4 = pooler:take_member("p4"),
+               ?assertMatch({"type-3", _Id}, pooled_gs:get_id(P4)),
+               ok = pooler:return_member(P4)
        end}
-
+      
      ]
     }}.
 
