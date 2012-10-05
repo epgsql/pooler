@@ -57,12 +57,12 @@
          }).
 
 -record(state, {
-          npools                       :: non_neg_integer(),
+          npools = 0                   :: non_neg_integer(),
           pools = dict:new()           :: dict(),
           pool_sups = dict:new()       :: dict(),
           all_members = dict:new()     :: dict(),
           consumer_to_pid = dict:new() :: dict(),
-          pool_selector                :: array()
+          pool_selector = array:new()  :: array()
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
@@ -75,6 +75,8 @@
 -export([start/1,
          start_link/1,
          stop/0,
+         addpool/1,
+         addpools/1,
          take_member/0,
          take_member/1,
          return_member/1,
@@ -111,6 +113,12 @@ start(Config) ->
 
 stop() ->
     gen_server:call(?SERVER, stop).
+
+addpool(PoolConfig) ->
+    gen_server:call(?SERVER, {addpool, PoolConfig}).
+
+addpools(PoolConfigs) ->
+    gen_server:call(?SERVER, {addpools, PoolConfigs}).
 
 %% @doc Obtain exclusive access to a member from a randomly selected pool.
 %%
@@ -181,23 +189,50 @@ pool_stats() ->
                                      pool_selector::'undefined' | array()}}.
 init(Config) ->
     process_flag(trap_exit, true),
-    PoolRecs = [ props_to_pool(P) || P <- ?gv(pools, Config) ],
-    Pools = [ {Pool#pool.name, Pool} || Pool <-  PoolRecs ],
-    PoolSups = [ begin
-                  {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [MFA]),
-                  {Name, SupPid}
-                 end || #pool{name = Name, start_mfa = MFA} <- PoolRecs ],
-    State0 = #state{npools = length(Pools),
-                    pools = dict:from_list(Pools),
-                    pool_sups = dict:from_list(PoolSups),
-                    pool_selector = array:from_list([PN || {PN, _} <- Pools])
-                  },
+    State0 = #state{},
+    try
+        State1 = addpools(?gv(pools, Config), State0),
+        {ok, State1}
+    catch
+        throw:duplicate_pool_name -> {error, duplicate_pool_name}
+    end.
 
-    lists:foldl(fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
-                        AccState1 = cull_members(PName, AccState),
-                        add_pids(PName, N, AccState1)
-                end, {ok, State0}, PoolRecs).
+addpools(PoolConfigs, State) ->
+    lists:foldl(fun addpool/2, State, PoolConfigs).
 
+addpool(PoolConfig, #state{npools = NPools,
+                           pools = Pools,
+                           pool_sups = PoolSups,
+                           pool_selector = PoolSelector} = State) ->
+    PoolRec = props_to_pool(PoolConfig),
+    %% Make sure we don't have a pool under that name already
+    case fetch_pool(PoolRec#pool.name, Pools) of
+        error_no_pool -> ok;
+        _Pool -> throw(duplicate_pool_name)
+    end,
+    OutPools = dict:store(PoolRec#pool.name, PoolRec, Pools),
+    {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [PoolRec#pool.start_mfa]),
+    OutPoolSups = dict:store(PoolRec#pool.name, SupPid, PoolSups),
+    OutPoolSelector = array:set(array:size(PoolSelector), PoolRec#pool.name, PoolSelector),
+    State1 = State#state{npools = NPools + 1,
+                           pools = OutPools,
+                           pool_sups = OutPoolSups,
+                           pool_selector = OutPoolSelector},
+    State2 = cull_members(PoolRec#pool.name, State1), % schedules culling
+    {ok, State3} = add_pids(PoolRec#pool.name, PoolRec#pool.init_count, State2),
+    State3.
+
+handle_call({addpool, PoolConfig}, {_CPid, _Tag}, State) ->
+    try
+        State1 = addpool(PoolConfig, State),
+        {reply, ok, State1}
+    catch
+        throw:duplicate_pool_name ->
+            {reply, {error, duplicate_pool_name}, State}
+    end;
+handle_call({addpools, PoolConfigs}, {_CPid, _Tag}, State) ->
+    State1 = addpools(PoolConfigs, State),
+    {reply, ok, State1};
 handle_call(take_member, {CPid, _Tag}, State) ->
     {Result, NewState} =  pick_member(CPid, State),
     {reply, Result, NewState};
@@ -586,7 +621,8 @@ add_member_to_consumer(MemberPid, CPid, CPMap) ->
 
 -spec cull_members(string(), #state{}) -> #state{}.
 cull_members(PoolName, #state{pools = Pools} = State) ->
-    cull_members_from_pool(fetch_pool(PoolName, Pools), State).
+    Pool = fetch_pool(PoolName, Pools),
+    cull_members_from_pool(Pool, State).
 
 -spec cull_members_from_pool(#pool{}, #state{}) -> #state{}.
 cull_members_from_pool(error_no_pool, State) ->
