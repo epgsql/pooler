@@ -114,9 +114,17 @@ start(Config) ->
 stop() ->
     gen_server:call(?SERVER, stop).
 
+%% @doc Add a new pool.
+%% PoolConfig is a proplist, same as what is passed to start.
+%% Returns ok|{error, ErrorInfo}
+-spec addpool([atom()|{atom(), term()}]) -> ok | {error, term()}.
 addpool(PoolConfig) ->
     gen_server:call(?SERVER, {addpool, PoolConfig}).
 
+%% @doc Add multiple pools.
+%% Input is a list of PoolConfigs.
+%% Returns ok|{error, ErrorInfo}
+-spec addpools([[atom()|{atom(), term()}]]) -> ok | {error, term()}.
 addpools(PoolConfigs) ->
     gen_server:call(?SERVER, {addpools, PoolConfigs}).
 
@@ -166,10 +174,6 @@ return_member(error_no_members) ->
 % remove_pool(Name, How) when How == graceful; How == immediate ->
 %     gen_server:call(?SERVER, {remove_pool, Name, How}).
 
-% TODO:
-% add_pool(Pool) ->
-%     gen_server:call(?SERVER, {add_pool, Pool}).
-
 %% @doc Obtain runtime state info for all pools.
 %%
 %% Format of the return value is subject to change.
@@ -196,31 +200,6 @@ init(Config) ->
     catch
         throw:duplicate_pool_name -> {error, duplicate_pool_name}
     end.
-
-addpools(PoolConfigs, State) ->
-    lists:foldl(fun addpool/2, State, PoolConfigs).
-
-addpool(PoolConfig, #state{npools = NPools,
-                           pools = Pools,
-                           pool_sups = PoolSups,
-                           pool_selector = PoolSelector} = State) ->
-    PoolRec = props_to_pool(PoolConfig),
-    %% Make sure we don't have a pool under that name already
-    case fetch_pool(PoolRec#pool.name, Pools) of
-        error_no_pool -> ok;
-        _Pool -> throw(duplicate_pool_name)
-    end,
-    OutPools = dict:store(PoolRec#pool.name, PoolRec, Pools),
-    {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [PoolRec#pool.start_mfa]),
-    OutPoolSups = dict:store(PoolRec#pool.name, SupPid, PoolSups),
-    OutPoolSelector = array:set(array:size(PoolSelector), PoolRec#pool.name, PoolSelector),
-    State1 = State#state{npools = NPools + 1,
-                           pools = OutPools,
-                           pool_sups = OutPoolSups,
-                           pool_selector = OutPoolSelector},
-    State2 = cull_members(PoolRec#pool.name, State1), % schedules culling
-    {ok, State3} = add_pids(PoolRec#pool.name, PoolRec#pool.init_count, State2),
-    State3.
 
 handle_call({addpool, PoolConfig}, {_CPid, _Tag}, State) ->
     try
@@ -289,6 +268,40 @@ code_change(_OldVsn, State, _Extra) ->
 %% ------------------------------------------------------------------
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
+
+%% @doc Internal version of addpools.
+%% Iterate over list of pool specifications calling addpool/2.
+-spec addpools([[atom()|{atom(), term()}]], #state{}) -> #state{}.
+addpools(PoolConfigs, State) ->
+    lists:foldl(fun addpool/2, State, PoolConfigs).
+
+%% @doc Internal version of addpool.
+%% Input is a proplist representing pool specifications, plus
+%% state.
+%% Updates state, starts pool supervisors, workers, etc.
+%% Returns updated state.
+-spec addpool([atom()|{atom(), term()}], #state{}) -> #state{}.
+addpool(PoolConfig, #state{npools = NPools,
+                           pools = Pools,
+                           pool_sups = PoolSups,
+                           pool_selector = PoolSelector} = State) ->
+    PoolRec = props_to_pool(PoolConfig),
+    %% Make sure we don't have a pool under that name already
+    case fetch_pool(PoolRec#pool.name, Pools) of
+        error_no_pool -> ok;
+        _Pool -> throw(duplicate_pool_name)
+    end,
+    OutPools = dict:store(PoolRec#pool.name, PoolRec, Pools),
+    {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [PoolRec#pool.start_mfa]),
+    OutPoolSups = dict:store(PoolRec#pool.name, SupPid, PoolSups),
+    OutPoolSelector = array:set(array:size(PoolSelector), PoolRec#pool.name, PoolSelector),
+    State1 = State#state{npools = NPools + 1,
+                           pools = OutPools,
+                           pool_sups = OutPoolSups,
+                           pool_selector = OutPoolSelector},
+    State2 = cull_members(PoolRec#pool.name, State1), % schedules culling
+    {ok, State3} = add_pids(PoolRec#pool.name, PoolRec#pool.init_count, State2),
+    State3.
 
 -spec props_to_pool([{atom(), term()}]) -> #pool{}.
 props_to_pool(P) ->
