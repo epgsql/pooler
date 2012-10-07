@@ -1,22 +1,22 @@
-.PHONY: deps test dialyzer clean distclean doc
+.PHONY: all compile test dialyzer clean distclean doc
 
-all: deps
-	@./rebar compile
+all: compile test dialyzer
+	@rebar compile
 
-deps:
-	@./rebar get-deps
+compile:
+	@rebar compile
 
 test:
-	@./rebar eunit skip_deps=true
+	@rebar eunit skip_deps=true
 
-dialyzer: all
+dialyzer:
 	@dialyzer -Wunderspecs -r ebin
 
 doc:
-	@./rebar doc skip_deps=true
+	@rebar doc skip_deps=true
 
 clean:
-	@./rebar clean
+	@rebar clean
 
 distclean: clean
-	@./rebar delete-deps
+	@rebar delete-deps
