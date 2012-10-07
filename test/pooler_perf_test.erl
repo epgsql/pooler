@@ -13,7 +13,7 @@ setup(InitCount, MaxCount, NumPools) ->
                        N = integer_to_list(I),
                        Name = "p" ++ N,
                        Arg0 = "pool-" ++ Name,
-                       [{name, Name},
+                       [{name, list_to_atom(Name)},
                         {max_count, MaxCount},
                         {init_count, InitCount},
                         {start_mfa,
@@ -27,11 +27,11 @@ consumer_cycle(N) ->
     consumer_cycle(N, 0, 0).
 
 consumer_cycle(N, NumOk, NumFail) when N > 0 ->
-    P = pooler:take_member(),
+    P = pooler:take_member(p1),
     case P of
         Pid when is_pid(Pid) ->
             true = is_process_alive(P),
-            pooler:return_member(P, ok),
+            pooler:return_member(p1, P, ok),
             consumer_cycle(N - 1, NumOk + 1, NumFail);
         _ ->
             consumer_cycle(N - 1, NumOk, NumFail + 1)

@@ -1,4 +1,4 @@
--module(pooler_test).
+-module(pooler_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -28,7 +28,7 @@ user_crash(Pid) ->
     Pid ! crash.
 
 user_loop(Atom) when Atom =:= error_no_members orelse Atom =:= start ->
-    user_loop(pooler:take_member());
+    user_loop(pooler:take_member(test_pool_1));
 user_loop(MyTC) ->
     receive
         {get_tc_id, From} ->
@@ -41,11 +41,11 @@ user_loop(MyTC) ->
             From ! pooled_gs:ping_count(MyTC),
             user_loop(MyTC);
         new_tc ->
-            pooler:return_member(MyTC, ok),
-            MyNewTC = pooler:take_member(),
+            pooler:return_member(test_pool_1, MyTC, ok),
+            MyNewTC = pooler:take_member(test_pool_1),
             user_loop(MyNewTC);
         stop ->
-            pooler:return_member(MyTC, ok),
+            pooler:return_member(test_pool_1, MyTC, ok),
             stopped;
         crash ->
             erlang:error({user_loop, kaboom})
@@ -113,13 +113,14 @@ pooler_basics_test_() ->
     {foreach,
      % setup
      fun() ->
-             Pools = [[{name, "p1"},
+             Pools = [[{name, test_pool_1},
                        {max_count, 3},
                        {init_count, 2},
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
+             %% error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(crypto),
              application:start(pooler)
      end,
      fun(_X) ->
@@ -128,34 +129,35 @@ pooler_basics_test_() ->
      [
       {"there are init_count members at start",
        fun() ->
-               Stats = [ P || {P, {_, free, _}} <- pooler:pool_stats() ],
+               Stats = [ P || {P, {_, free, _}} <- pooler:pool_stats(test_pool_1) ],
                ?assertEqual(2, length(Stats))
        end},
 
       {"take and return one",
        fun() ->
-               P = pooler:take_member(),
+               P = pooler:take_member(test_pool_1),
                ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
-               ok = pooler:return_member(P, ok)
+               ok = pooler:return_member(test_pool_1, P, ok)
        end},
 
       {"take and return one, named pool",
        fun() ->
-               P = pooler:take_member("p1"),
+               P = pooler:take_member(test_pool_1),
                ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
-               ok, pooler:return_member(P)
+               ok, pooler:return_member(test_pool_1, P)
        end},
 
       {"attempt to take form unknown pool",
        fun() ->
-               ?assertEqual(error_no_pool, pooler:take_member("bad_pool_name"))
+               %% since pools are now servers, an unknown pool will timeout
+               ?assertExit({noproc, _}, pooler:take_member(bad_pool_name))
        end},
 
       {"pids are created on demand until max",
        fun() ->
-               Pids = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
-               ?assertEqual(error_no_members, pooler:take_member()),
-               ?assertEqual(error_no_members, pooler:take_member()),
+               Pids = [pooler:take_member(test_pool_1), pooler:take_member(test_pool_1), pooler:take_member(test_pool_1)],
+               ?assertEqual(error_no_members, pooler:take_member(test_pool_1)),
+               ?assertEqual(error_no_members, pooler:take_member(test_pool_1)),
                PRefs = [ R || {_T, R} <- [ pooled_gs:get_id(P) || P <- Pids ] ],
                % no duplicates
                ?assertEqual(length(PRefs), length(lists:usort(PRefs)))
@@ -164,20 +166,20 @@ pooler_basics_test_() ->
 
       {"pids are reused most recent return first",
        fun() ->
-               P1 = pooler:take_member(),
-               P2 = pooler:take_member(),
+               P1 = pooler:take_member(test_pool_1),
+               P2 = pooler:take_member(test_pool_1),
                ?assertNot(P1 == P2),
-               ok = pooler:return_member(P1, ok),
-               ok = pooler:return_member(P2, ok),
+               ok = pooler:return_member(test_pool_1, P1, ok),
+               ok = pooler:return_member(test_pool_1, P2, ok),
                % pids are reused most recent first
-               ?assertEqual(P2, pooler:take_member()),
-               ?assertEqual(P1, pooler:take_member())
+               ?assertEqual(P2, pooler:take_member(test_pool_1)),
+               ?assertEqual(P1, pooler:take_member(test_pool_1))
        end},
 
       {"if an in-use pid crashes it is replaced",
        fun() ->
-               Pids0 = [pooler:take_member(), pooler:take_member(),
-                        pooler:take_member()],
+               Pids0 = [pooler:take_member(test_pool_1), pooler:take_member(test_pool_1),
+                        pooler:take_member(test_pool_1)],
                Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % crash them all
                [ pooled_gs:crash(P) || P <- Pids0 ],
@@ -189,7 +191,7 @@ pooler_basics_test_() ->
 
       {"if a free pid crashes it is replaced",
        fun() ->
-               FreePids = [ P || {P, {_, free, _}} <- pooler:pool_stats() ],
+               FreePids = [ P || {P, {_, free, _}} <- pooler:pool_stats(test_pool_1) ],
                [ exit(P, kill) || P <- FreePids ],
                Pids1 = get_n_pids(3, []),
                ?assertEqual(3, length(Pids1))
@@ -197,10 +199,10 @@ pooler_basics_test_() ->
 
       {"if a pid is returned with bad status it is replaced",
        fun() ->
-               Pids0 = [pooler:take_member(), pooler:take_member(), pooler:take_member()],
+               Pids0 = [pooler:take_member(test_pool_1), pooler:take_member(test_pool_1), pooler:take_member(test_pool_1)],
                Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % return them all marking as bad
-               [ pooler:return_member(P, fail) || P <- Pids0 ],
+               [ pooler:return_member(test_pool_1, P, fail) || P <- Pids0 ],
                Pids1 = get_n_pids(3, []),
                Ids1 = [ pooled_gs:get_id(P) || P <- Pids1 ],
                [ ?assertNot(lists:member(I, Ids0)) || I <- Ids1 ]
@@ -222,16 +224,16 @@ pooler_basics_test_() ->
        fun() ->
                Bogus1 = spawn(fun() -> ok end),
                Bogus2 = spawn(fun() -> ok end),
-               ?assertEqual(ok, pooler:return_member(Bogus1, ok)),
-               ?assertEqual(ok, pooler:return_member(Bogus2, fail))
+               ?assertEqual(ok, pooler:return_member(test_pool_1, Bogus1, ok)),
+               ?assertEqual(ok, pooler:return_member(test_pool_1, Bogus2, fail))
        end
       },
 
       {"calling return_member on error_no_members is ignored",
        fun() ->
-               ?assertEqual(ok, pooler:return_member(error_no_members)),
-               ?assertEqual(ok, pooler:return_member(error_no_members, ok)),
-               ?assertEqual(ok, pooler:return_member(error_no_members, fail))
+               ?assertEqual(ok, pooler:return_member(test_pool_1, error_no_members)),
+               ?assertEqual(ok, pooler:return_member(test_pool_1, error_no_members, ok)),
+               ?assertEqual(ok, pooler:return_member(test_pool_1, error_no_members, fail))
        end
       },
 
@@ -239,13 +241,13 @@ pooler_basics_test_() ->
        fun() ->
                %% exercise the API to ensure we have certain keys reported as metrics
                fake_metrics:reset_metrics(),
-               Pids = [ pooler:take_member() || _I <- lists:seq(1, 10) ],
-               [ pooler:return_member(P) || P <- Pids ],
-               pooler:take_member("bad_pool_name"),
+               Pids = [ pooler:take_member(test_pool_1) || _I <- lists:seq(1, 10) ],
+               [ pooler:return_member(test_pool_1, P) || P <- Pids ],
+               catch pooler:take_member(bad_pool_name),
                %% kill and unused member
                exit(hd(Pids), kill),
                %% kill a used member
-               KillMe = pooler:take_member("p1"),
+               KillMe = pooler:take_member(test_pool_1),
                exit(KillMe, kill),
                %% FIXME: We need to wait for pooler to process the
                %% exit message. This is ugly, will fix later.
@@ -254,9 +256,9 @@ pooler_basics_test_() ->
                              <<"pooler.events">>,
                              <<"pooler.killed_free_count">>,
                              <<"pooler.killed_in_use_count">>,
-                             <<"pooler.p1.free_count">>,
-                             <<"pooler.p1.in_use_count">>,
-                             <<"pooler.p1.take_rate">>],
+                             <<"pooler.test_pool_1.free_count">>,
+                             <<"pooler.test_pool_1.in_use_count">>,
+                             <<"pooler.test_pool_1.take_rate">>],
                Metrics = fake_metrics:get_metrics(),
                GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
                ?assertEqual(ExpectKeys, GotKeys)
@@ -268,7 +270,7 @@ pooler_limit_failed_adds_test_() ->
     %% encountered while trying to add pids.
     {setup,
      fun() ->
-             Pools = [[{name, "p1"},
+             Pools = [[{name, test_pool_1},
                        {max_count, 10},
                        {init_count, 10},
                        {start_mfa,
@@ -280,8 +282,8 @@ pooler_limit_failed_adds_test_() ->
      end,
      fun() ->
              application:start(pooler),
-             ?assertEqual(error_no_members, pooler:take_member()),
-             ?assertEqual(error_no_members, pooler:take_member("p1"))
+             ?assertEqual(error_no_members, pooler:take_member(test_pool_1)),
+             ?assertEqual(error_no_members, pooler:take_member(test_pool_1))
      end}.
 
 pooler_scheduled_cull_test_() ->
@@ -289,13 +291,13 @@ pooler_scheduled_cull_test_() ->
      fun() ->
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link(),
-             Pools = [[{name, "p1"},
+             Pools = [[{name, test_pool_1},
                        {max_count, 10},
                        {init_count, 2},
                        {start_mfa, {pooled_gs, start_link, [{"type-0"}]}},
                        {cull_interval, {200, ms}}]],
              application:set_env(pooler, pools, Pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
+             %% error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler)
      end,
      fun(_X) ->
@@ -305,52 +307,52 @@ pooler_scheduled_cull_test_() ->
      [{"excess members are culled repeatedly",
        fun() ->
                %% take all members
-               Pids1 = [ pooler:take_member("p1") || _X <- lists:seq(1, 10) ],
+               Pids1 = [ pooler:take_member(test_pool_1) || _X <- lists:seq(1, 10) ],
                %% return all
-               [ pooler:return_member(P) || P <- Pids1 ],
-               ?assertEqual(10, length(pooler:pool_stats())),
+               [ pooler:return_member(test_pool_1, P) || P <- Pids1 ],
+               ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
                %% wait for longer than cull delay
                timer:sleep(250),
-               ?assertEqual(2, length(pooler:pool_stats())),
+               ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
 
                %% repeat the test to verify that culling gets rescheduled.
-               Pids2 = [ pooler:take_member("p1") || _X <- lists:seq(1, 10) ],
+               Pids2 = [ pooler:take_member(test_pool_1) || _X <- lists:seq(1, 10) ],
                %% return all
-               [ pooler:return_member(P) || P <- Pids2 ],
-               ?assertEqual(10, length(pooler:pool_stats())),
+               [ pooler:return_member(test_pool_1, P) || P <- Pids2 ],
+               ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
                %% wait for longer than cull delay
                timer:sleep(250),
-               ?assertEqual(2, length(pooler:pool_stats()))
+               ?assertEqual(2, length(pooler:pool_stats(test_pool_1)))
        end
       },
 
       {"non-excess members are not culled",
        fun() ->
-               [P1, P2] = [pooler:take_member("p1") || _X <- [1, 2] ],
-               [pooler:return_member(P) || P <- [P1, P2] ],
-               ?assertEqual(2, length(pooler:pool_stats())),
+               [P1, P2] = [pooler:take_member(test_pool_1) || _X <- [1, 2] ],
+               [pooler:return_member(test_pool_1, P) || P <- [P1, P2] ],
+               ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
                timer:sleep(250),
-               ?assertEqual(2, length(pooler:pool_stats()))
+               ?assertEqual(2, length(pooler:pool_stats(test_pool_1)))
        end
       },
 
       {"in-use members are not culled",
        fun() ->
                %% take all members
-               Pids = [ pooler:take_member("p1") || _X <- lists:seq(1, 10) ],
+               Pids = [ pooler:take_member(test_pool_1) || _X <- lists:seq(1, 10) ],
                %% don't return any
-               ?assertEqual(10, length(pooler:pool_stats())),
+               ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
                %% wait for longer than cull delay
                timer:sleep(250),
-               ?assertEqual(10, length(pooler:pool_stats())),
-               [ pooler:return_member(P) || P <- Pids ]
+               ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
+               [ pooler:return_member(test_pool_1, P) || P <- Pids ]
        end}
      ]}.
 
 random_message_test_() ->
     {setup,
      fun() ->
-             Pools = [[{name, "p1"},
+             Pools = [[{name, test_pool_1},
                        {max_count, 2},
                        {init_count, 1},
                        {start_mfa,
@@ -360,9 +362,9 @@ random_message_test_() ->
              application:start(pooler),
              %% now send some bogus messages
              %% do the call in a throw-away process to avoid timeout error
-             spawn(fun() -> catch gen_server:call(pooler, {unexpected_garbage_msg, 5}) end),
-             gen_server:cast(pooler, {unexpected_garbage_msg, 6}),
-            whereis(pooler) ! {unexpected_garbage_msg, 7},
+             spawn(fun() -> catch gen_server:call(test_pool_1, {unexpected_garbage_msg, 5}) end),
+             gen_server:cast(test_pool_1, {unexpected_garbage_msg, 6}),
+             whereis(test_pool_1) ! {unexpected_garbage_msg, 7},
              ok
      end,
      fun(_) ->
@@ -370,7 +372,7 @@ random_message_test_() ->
      end,
     [
      fun() ->
-             Pid = pooler:take_member("p1"),
+             Pid = pooler:take_member(test_pool_1),
              {Type, _} =  pooled_gs:get_id(Pid),
              ?assertEqual("type-0", Type)
      end
@@ -380,7 +382,7 @@ pooler_integration_test_() ->
     {foreach,
      % setup
      fun() ->
-             Pools = [[{name, "p1"},
+             Pools = [[{name, test_pool_1},
                        {max_count, 10},
                        {init_count, 10},
                        {start_mfa,
@@ -460,7 +462,7 @@ time_as_micros_test_() ->
 get_n_pids(0, Acc) ->
     Acc;
 get_n_pids(N, Acc) ->
-    case pooler:take_member() of
+    case pooler:take_member(test_pool_1) of
         error_no_members ->
             get_n_pids(N, Acc);
         Pid ->
