@@ -296,9 +296,12 @@ pooler_sup:                one_for_one
 pooler_NAME_pool_sup:      all_for_one
 pooler_pooled_worker_sup:  simple_one_for_one
 
-pooler_sup owns an ETS table of type bag used to store pool groups. At
-start, if a group tag is found in pool config, an entry with key
-GroupName is added to the pooler_groups_tab table.
+Groups of pools are managed using the pg2 application. This imposes a
+requirement to set a configuration parameter on the kernel application
+in an OTP release. Like this in sys.config:
+#+begin_src erlang
+{kernel, [{start_pg2, true}]}
+#+end_src
 
 ** License
 Pooler is licensed under the Apache License Version 2.0.  See the
