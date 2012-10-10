@@ -32,6 +32,9 @@
          start_link/1,
          stop/1,
          take_member/1,
+         take_group_member/1,
+         return_group_member/2,
+         return_group_member/3,
          return_member/2,
          return_member/3,
          pool_stats/1]).
@@ -73,6 +76,68 @@ stop(Name) ->
 take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
     gen_server:call(PoolName, take_member, infinity).
 
+%% @doc Take a member from a randomly selected member of the group
+%% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
+%% members are available in the randomly chosen pool, all other pools
+%% in the group are tried in order.
+-spec take_group_member(atom()) -> pid() | error_no_members.
+take_group_member(GroupName) ->
+    case pg2:get_local_members(GroupName) of
+        {error, {no_such_group, GroupName}} = Error ->
+            Error;
+        Members ->
+            %% Put a random member at the front of the list and then
+            %% return the first member you can walking the list.
+            Idx = crypto:rand_uniform(1, length(Members) + 1),
+            {Pid, Rest} = extract_nth(Idx, Members),
+            take_first_member([Pid | Rest])
+    end.
+
+take_first_member([Pid | Rest]) ->
+    case take_member(Pid) of
+        error_no_members ->
+            take_first_member(Rest);
+        Member ->
+            ets:insert(?POOLER_GROUP_TABLE, {Member, Pid}),
+            Member
+    end;
+take_first_member([]) ->
+    error_no_members.
+
+%% this helper function returns `{Nth_Elt, Rest}' where `Nth_Elt' is
+%% the nth element of `L' and `Rest' is `L -- [Nth_Elt]'.
+extract_nth(N, L) ->
+    extract_nth(N, L, []).
+
+extract_nth(1, [H | T], Acc) ->
+    {H, Acc ++ T};
+extract_nth(N, [H | T], Acc) ->
+    extract_nth(N - 1, T, [H | Acc]);
+extract_nth(_, [], _) ->
+    error(badarg).
+
+%% @doc Return a member that was taken from the group
+%% `GroupName'. This is a convenience function for
+%% `return_group_member/3' with `Status' of `ok'.
+-spec return_group_member(atom(), pid() | error_no_members) -> ok.
+return_group_member(GroupName, MemberPid) ->
+    return_group_member(GroupName, MemberPid, ok).
+
+%% @doc Return a member that was taken from the group `GroupName'. If
+%% `Status' is `ok' the member is returned to the pool from which is
+%% came. If `Status' is `fail' the member will be terminated and a new
+%% member added to the appropriate pool.
+-spec return_group_member(atom(), pid() | error_no_members, ok | fail) -> ok.
+return_group_member(_, error_no_members, _) ->
+    ok;
+return_group_member(_GroupName, MemberPid, Status) ->
+    case ets:lookup(?POOLER_GROUP_TABLE, MemberPid) of
+        [{MemberPid, PoolPid}] ->
+            return_member(PoolPid, MemberPid, Status);
+        [] ->
+            ok
+    end.
+
 %% @doc Return a member to the pool so it can be reused.
 %%
 %% If `Status' is 'ok', the member is returned to the pool.  If
@@ -110,7 +175,7 @@ pool_stats(PoolName) ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 
--spec init(#pool{}) -> {'ok', #pool{}}.
+-spec init(#pool{}) -> {'ok', #pool{}, 0}.
 init(#pool{}=Pool) ->
     %% FIXME: change to a monitor only model so that this doesn't have
     %% to be a system process.
@@ -119,7 +184,12 @@ init(#pool{}=Pool) ->
     MemberSup = pooler_pool_sup:member_sup_name(Pool),
     Pool1 = set_member_sup(Pool, MemberSup),
     Pool2 = cull_members_from_pool(Pool1),
-    add_pids(N, Pool2).
+    {ok, NewPool} = add_pids(N, Pool2),
+    %% trigger an immediate timeout, handled by handle_info to allow
+    %% us to register with pg2. We use the timeout mechanism to ensure
+    %% that a server is added to a group only when it is ready to
+    %% process messages.
+    {ok, NewPool, 0}.
 
 set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
@@ -142,6 +212,13 @@ handle_cast(_Msg, Pool) ->
     {noreply, Pool}.
 
 -spec handle_info(_, _) -> {'noreply', _}.
+handle_info(timeout, #pool{group = undefined} = Pool) ->
+    %% ignore
+    {noreply, Pool};
+handle_info(timeout, #pool{group = Group} = Pool) ->
+    ok = pg2:create(Group),
+    ok = pg2:join(Group, self()),
+    {noreply, Pool};
 handle_info({'EXIT', Pid, Reason}, State) ->
     State1 =
         case dict:find(Pid, State#pool.all_members) of
@@ -261,6 +338,7 @@ take_member_from_pool(#pool{name = PoolName,
 
 -spec do_return_member(pid(), ok | fail, #pool{}) -> #pool{}.
 do_return_member(Pid, ok, #pool{all_members = AllMembers} = Pool) ->
+    clean_group_table(Pid, Pool),
     case dict:find(Pid, AllMembers) of
         {ok, {PoolName, CPid, _}} ->
             #pool{free_pids = Free, in_use_count = NumInUse,
@@ -277,6 +355,7 @@ do_return_member(Pid, ok, #pool{all_members = AllMembers} = Pool) ->
 do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
     % for the fail case, perhaps the member crashed and was alerady
     % removed, so use find instead of fetch and ignore missing.
+    clean_group_table(Pid, Pool),
     case dict:find(Pid, AllMembers) of
         {ok, {_PoolName, _, _}} ->
             Pool1 = remove_pid(Pid, Pool),
@@ -293,6 +372,11 @@ do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
         error ->
             Pool
     end.
+
+clean_group_table(_MemberPid, #pool{group = undefined}) ->
+    ok;
+clean_group_table(MemberPid, #pool{group = _GroupName}) ->
+    ets:delete(?POOLER_GROUP_TABLE, MemberPid).
 
 % @doc Remove `Pid' from the pid list associated with `CPid' in the
 % consumer to member map given by `CPMap'.
