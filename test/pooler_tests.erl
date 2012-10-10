@@ -119,7 +119,7 @@ pooler_basics_test_() ->
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
-             %% error_logger:delete_report_handler(error_logger_tty_h),
+             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(crypto),
              application:start(pooler)
      end,
@@ -264,6 +264,100 @@ pooler_basics_test_() ->
                ?assertEqual(ExpectKeys, GotKeys)
        end}
      ]}}.
+
+pooler_groups_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
+    {foreach,
+     % setup
+     fun() ->
+             Pools = [[{name, test_pool_1},
+                       {group, group_1},
+                       {max_count, 3},
+                       {init_count, 2},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-1-1"}]}}],
+                      [{name, test_pool_2},
+                       {group, group_1},
+                       {max_count, 3},
+                       {init_count, 2},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-1-2"}]}}],
+                      %% test_pool_3 not part of the group
+                      [{name, test_pool_3},
+                       {group, undefined},
+                       {max_count, 3},
+                       {init_count, 2},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-3"}]}}]
+                     ],
+             application:set_env(pooler, pools, Pools),
+             %% error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(crypto),
+             pg2:start(),
+             application:start(pooler)
+     end,
+     fun(_X) ->
+             application:stop(pooler)
+     end,
+     [
+      {"take and return one group member (repeated)",
+       fun() ->
+               Types = [ begin
+                             Pid = pooler:take_group_member(group_1),
+                             {Type, _} = pooled_gs:get_id(Pid),
+                             ?assertMatch("type-1" ++ _, Type),
+                             ok = pooler:return_group_member(group_1, Pid, ok),
+                             Type
+                         end
+                         || _I <- lists:seq(1, 50) ],
+               Type_1_1 = [ X || "type-1-1" = X <- Types ],
+               Type_1_2 = [ X || "type-1-2" = X <- Types ],
+               ?assert(length(Type_1_1) > 0),
+               ?assert(length(Type_1_2) > 0)
+       end},
+
+      {"take member from unknown group",
+       fun() ->
+               ?assertEqual({error, {no_such_group, not_a_group}},
+                            pooler:take_group_member(not_a_group))
+       end},
+
+      {"return member to group, implied ok",
+       fun() ->
+               Pid = pooler:take_group_member(group_1),
+               ?assertEqual(ok, pooler:return_group_member(group_1, Pid))
+       end},
+
+      {"return error_no_member to group",
+       fun() ->
+               ?assertEqual(ok, pooler:return_group_member(group_1, error_no_members))
+       end},
+      
+
+      {"exhaust pools in group",
+       fun() ->
+               Pids = [ pooler:take_group_member(group_1) || _I <- lists:seq(1, 6) ],
+               %% they should all be pids
+               [ begin
+                     {Type, _} = pooled_gs:get_id(P),
+                     ?assertMatch("type-1" ++ _, Type),
+                     ok
+                 end || P <- Pids ],
+               %% further attempts should be error
+               [error_no_members,
+                error_no_members,
+                error_no_members] = [ pooler:take_group_member(group_1)
+                                      || _I <- lists:seq(1, 3) ]
+       end}
+     ]}}.
+               
 
 pooler_limit_failed_adds_test_() ->
     %% verify that pooler crashes completely if too many failures are

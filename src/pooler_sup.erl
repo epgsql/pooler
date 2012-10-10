@@ -14,6 +14,7 @@ init([]) ->
     {ok, Config} = application:get_env(pooler, pools),
     Pools = [ pooler_config:list_to_pool(L) || L <- Config ],
     PoolSupSpecs = [ pool_sup_spec(Pool) || Pool <- Pools ],
+    ets:new(?POOLER_GROUP_TABLE, [set, public, named_table, {write_concurrency, true}]),
     {ok, {{one_for_one, 5, 60}, PoolSupSpecs}}.
 
 pool_sup_spec(#pool{name = Name} = Pool) ->

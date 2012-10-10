@@ -2,6 +2,8 @@
 -define(DEFAULT_CULL_INTERVAL, {0, min}).
 -define(DEFAULT_MAX_AGE, {0, min}).
 
+-define(POOLER_GROUP_TABLE, pooler_group_table).
+
 -type member_info() :: {string(), free | pid(), {_, _, _}}.
 -type free_member_info() :: {string(), free, {_, _, _}}.
 -type time_unit() :: min | sec | ms | mu.
