@@ -463,9 +463,7 @@ do_n(N, Fun, Acc) ->
     do_n(N - 1, Fun, Fun(Acc)).
 
 pool_add_retries(#pool{add_member_retry = Retries}) ->
-    Retries;
-pool_add_retries(error_no_pool) ->
-    0.
+    Retries.
 
 -spec store_all_members(pid(),
                         {string(), free | pid(), {_, _, _}}, dict()) -> dict().
