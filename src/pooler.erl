@@ -179,16 +179,6 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
--spec props_to_pool([{atom(), term()}]) -> #pool{}.
-props_to_pool(P) ->
-    #pool{      name = ?gv(name, P),
-           max_count = ?gv(max_count, P),
-          init_count = ?gv(init_count, P),
-           start_mfa = ?gv(start_mfa, P),
-    add_member_retry = ?gv(add_member_retry, P, ?DEFAULT_ADD_RETRY),
-       cull_interval = ?gv(cull_interval, P, ?DEFAULT_CULL_INTERVAL),
-             max_age = ?gv(max_age, P, ?DEFAULT_MAX_AGE)}.
-
 % FIXME: creation of new pids should probably happen
 % in a spawned process to avoid tying up the loop.
 -spec add_pids(non_neg_integer(), #pool{}) ->
