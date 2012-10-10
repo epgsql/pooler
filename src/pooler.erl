@@ -28,9 +28,7 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start/1,
-         start_link/1,
-         stop/1,
+-export([start_link/1,
          take_member/1,
          take_group_member/1,
          return_group_member/2,
@@ -61,12 +59,6 @@
 
 start_link(#pool{name = Name} = Pool) ->
     gen_server:start_link({local, Name}, ?MODULE, Pool, []).
-
-start(#pool{name = Name} = Pool) ->
-    gen_server:start({local, Name}, ?MODULE, Pool, []).
-
-stop(Name) ->
-    gen_server:call(Name, stop).
 
 %% @doc Obtain exclusive access to a member from `PoolName'.
 %%
