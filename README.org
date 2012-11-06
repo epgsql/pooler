@@ -4,6 +4,9 @@ The pooler application allows you to manage pools of OTP behaviors
 such as gen_servers, gen_fsms, or supervisors, and provide consumers
 with exclusive access to pool members using =pooler:take_member=.
 
+#+ATTR_HTML: alt="Build status images" title="Build status on Travis-CI"
+[[https://travis-ci.org/seth/pooler.png]]
+
 ** What pooler does
 
 *** Protects the members of a pool from being used concurrently
