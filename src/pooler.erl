@@ -57,12 +57,12 @@
          }).
 
 -record(state, {
-          npools                       :: non_neg_integer(),
+          npools = 0                   :: non_neg_integer(),
           pools = dict:new()           :: dict(),
           pool_sups = dict:new()       :: dict(),
           all_members = dict:new()     :: dict(),
           consumer_to_pid = dict:new() :: dict(),
-          pool_selector                :: array()
+          pool_selector = array:new()  :: array()
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
@@ -75,6 +75,8 @@
 -export([start/1,
          start_link/1,
          stop/0,
+         addpool/1,
+         addpools/1,
          take_member/0,
          take_member/1,
          return_member/1,
@@ -111,6 +113,20 @@ start(Config) ->
 
 stop() ->
     gen_server:call(?SERVER, stop).
+
+%% @doc Add a new pool.
+%% PoolConfig is a proplist, same as what is passed to start.
+%% Returns ok|{error, ErrorInfo}
+-spec addpool([atom()|{atom(), term()}]) -> ok | {error, term()}.
+addpool(PoolConfig) ->
+    gen_server:call(?SERVER, {addpool, PoolConfig}).
+
+%% @doc Add multiple pools.
+%% Input is a list of PoolConfigs.
+%% Returns ok|{error, ErrorInfo}
+-spec addpools([[atom()|{atom(), term()}]]) -> ok | {error, term()}.
+addpools(PoolConfigs) ->
+    gen_server:call(?SERVER, {addpools, PoolConfigs}).
 
 %% @doc Obtain exclusive access to a member from a randomly selected pool.
 %%
@@ -156,10 +172,6 @@ return_member(error_no_members) ->
 % remove_pool(Name, How) when How == graceful; How == immediate ->
 %     gen_server:call(?SERVER, {remove_pool, Name, How}).
 
-% TODO:
-% add_pool(Pool) ->
-%     gen_server:call(?SERVER, {add_pool, Pool}).
-
 %% @doc Obtain runtime state info for all pools.
 %%
 %% Format of the return value is subject to change.
@@ -179,42 +191,28 @@ pool_stats() ->
                                      pool_selector::'undefined' | array()}}.
 init(Config) ->
     process_flag(trap_exit, true),
-    PoolRecs = [ props_to_pool(P) || P <- ?gv(pools, Config) ],
-    Pools = [ {Pool#pool.name, Pool} || Pool <-  PoolRecs ],
-    PoolSups = [ begin
-                  {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [MFA]),
-                  {Name, SupPid}
-                 end || #pool{name = Name, start_mfa = MFA} <- PoolRecs ],
-    State0 = #state{npools = length(Pools),
-                    pools = dict:from_list(Pools),
-                    pool_sups = dict:from_list(PoolSups),
-                    pool_selector = array:from_list([PN || {PN, _} <- Pools])
-                  },
+    State0 = #state{},
+    try
+        State1 = addpools(?gv(pools, Config), State0),
+        {ok, State1}
+    catch
+        throw:duplicate_pool_name -> {error, duplicate_pool_name}
+    end.
 
-    lists:foldl(fun(#pool{name = PName, init_count = N}, {ok, AccState}) ->
-                        AccState1 = cull_members(PName, AccState),
-                        add_pids(PName, N, AccState1)
-                end, {ok, State0}, PoolRecs).
-
-handle_call(take_member, {CPid, _Tag},
-            #state{pool_selector = PS, npools = NP} = State) ->
-    % attempt to return a member from a randomly selected pool.  If
-    % that pool has no members, find the pool with most free members
-    % and return a member from there.
-    PoolName = array:get(crypto:rand_uniform(0, NP), PS),
-    case take_member(PoolName, CPid, State) of
-        {error_no_members, NewState} ->
-            case max_free_pool(State#state.pools) of
-                error_no_members ->
-                    {reply, error_no_members, NewState};
-                MaxFreePoolName ->
-                    {NewPid, State2} = take_member(MaxFreePoolName, CPid,
-                                                   NewState),
-                    {reply, NewPid, State2}
-            end;
-        {NewPid, NewState} ->
-            {reply, NewPid, NewState}
+handle_call({addpool, PoolConfig}, {_CPid, _Tag}, State) ->
+    try
+        State1 = addpool(PoolConfig, State),
+        {reply, ok, State1}
+    catch
+        throw:duplicate_pool_name ->
+            {reply, {error, duplicate_pool_name}, State}
     end;
+handle_call({addpools, PoolConfigs}, {_CPid, _Tag}, State) ->
+    State1 = addpools(PoolConfigs, State),
+    {reply, ok, State1};
+handle_call(take_member, {CPid, _Tag}, State) ->
+    {Result, NewState} =  pick_member(CPid, State),
+    {reply, Result, NewState};
 handle_call({take_member, PoolName}, {CPid, _Tag}, #state{} = State) ->
     {Member, NewState} = take_member(PoolName, CPid, State),
     {reply, Member, NewState};
@@ -269,6 +267,40 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
+%% @doc Internal version of addpools.
+%% Iterate over list of pool specifications calling addpool/2.
+-spec addpools([[atom()|{atom(), term()}]], #state{}) -> #state{}.
+addpools(PoolConfigs, State) ->
+    lists:foldl(fun addpool/2, State, PoolConfigs).
+
+%% @doc Internal version of addpool.
+%% Input is a proplist representing pool specifications, plus
+%% state.
+%% Updates state, starts pool supervisors, workers, etc.
+%% Returns updated state.
+-spec addpool([atom()|{atom(), term()}], #state{}) -> #state{}.
+addpool(PoolConfig, #state{npools = NPools,
+                           pools = Pools,
+                           pool_sups = PoolSups,
+                           pool_selector = PoolSelector} = State) ->
+    PoolRec = props_to_pool(PoolConfig),
+    %% Make sure we don't have a pool under that name already
+    case fetch_pool(PoolRec#pool.name, Pools) of
+        error_no_pool -> ok;
+        _Pool -> throw(duplicate_pool_name)
+    end,
+    OutPools = dict:store(PoolRec#pool.name, PoolRec, Pools),
+    {ok, SupPid} = supervisor:start_child(pooler_pool_sup, [PoolRec#pool.start_mfa]),
+    OutPoolSups = dict:store(PoolRec#pool.name, SupPid, PoolSups),
+    OutPoolSelector = array:set(array:size(PoolSelector), PoolRec#pool.name, PoolSelector),
+    State1 = State#state{npools = NPools + 1,
+                           pools = OutPools,
+                           pool_sups = OutPoolSups,
+                           pool_selector = OutPoolSelector},
+    State2 = cull_members(PoolRec#pool.name, State1), % schedules culling
+    {ok, State3} = add_pids(PoolRec#pool.name, PoolRec#pool.init_count, State2),
+    State3.
+
 -spec props_to_pool([{atom(), term()}]) -> #pool{}.
 props_to_pool(P) ->
     #pool{      name = ?gv(name, P),
@@ -314,6 +346,52 @@ add_pids(PoolName, N, State) ->
         false ->
             {max_count_reached, State}
     end.
+
+-define(PICK_STRATEGIES, [random, free, available]).
+
+%% @doc Pick a pool member and check it out.
+%% Tries several strategies to pick the pool:
+%%
+%% 1. random
+%% 2. max free members
+%% 3. max available members
+%%
+%% Returns {Result, NewState}.
+%% Result is pid of pool member checked out, or
+%% error_no_pool, or error_no_members.
+%%
+-spec pick_member(pid(), #state{}) ->
+    {error_no_pool | error_no_members | pid(), #state{}}.
+pick_member(From, State) ->
+    pick_member(From, State, ?PICK_STRATEGIES).
+
+pick_member(_From, State, []) ->
+    {error_no_members, State};
+pick_member(From, State, [Strategy|Strategies]) ->
+    case pick_pool(State, Strategy) of
+        error_no_members ->
+            pick_member(From, State, Strategies);
+        PoolName ->
+            case take_member(PoolName, From, State) of
+                {error_no_members, NewState} ->
+                    pick_member(From, NewState, Strategies);
+                Other ->
+                    Other
+            end
+    end.
+
+%% @doc Pick a pool according to given strategy
+%% Returns a pool name or error_no_members or error_no_pool.
+-spec pick_pool(#state{}, random|free|available) ->
+          error_no_member|error_no_pools|string().
+pick_pool(#state{pools=[]}=_State, _Strategy) ->
+    error_no_pool;
+pick_pool(#state{pool_selector = PS, npools = NP}=_State, random) ->
+    array:get(crypto:rand_uniform(0, NP), PS);
+pick_pool(#state{pools=Pools}=_State, free) ->
+    max_free_pool(Pools);
+pick_pool(#state{pools=Pools}=_State, available) ->
+    max_avail_pool(Pools).
 
 -spec take_member(string(), {pid(), _}, #state{}) ->
     {error_no_pool | error_no_members | pid(), #state{}}.
@@ -481,6 +559,22 @@ fold_max_free_count(Name, Pool, {CName, CMax}) ->
         false -> {CName, CMax}
     end.
 
+%% @doc Returns pool with the most available members.
+-spec max_avail_pool(dict()) -> error_no_members | string().
+max_avail_pool(Pools) ->
+    case dict:fold(fun fold_max_avail_count/3, {"", 0}, Pools) of
+        {"", 0} -> error_no_members;
+        {MaxAvailPoolName, _} -> MaxAvailPoolName
+    end.
+
+-spec fold_max_avail_count(string(), #pool{}, {string(), non_neg_integer()}) ->
+    {string(), non_neg_integer()}.
+fold_max_avail_count(Name, Pool, {CName, CMax}) ->
+    Available = Pool#pool.max_count - Pool#pool.in_use_count,
+    case Available > CMax of
+        true -> {Name, Available};
+        false -> {CName, CMax}
+    end.
 
 -spec start_n_pids(non_neg_integer(), string(), pid(), dict()) ->
     {dict(), [pid()]}.
@@ -541,7 +635,8 @@ add_member_to_consumer(MemberPid, CPid, CPMap) ->
 
 -spec cull_members(string(), #state{}) -> #state{}.
 cull_members(PoolName, #state{pools = Pools} = State) ->
-    cull_members_from_pool(fetch_pool(PoolName, Pools), State).
+    Pool = fetch_pool(PoolName, Pools),
+    cull_members_from_pool(Pool, State).
 
 -spec cull_members_from_pool(#pool{}, #state{}) -> #state{}.
 cull_members_from_pool(error_no_pool, State) ->
@@ -626,3 +721,79 @@ time_as_micros({Time, ms}) ->
     1000 * Time;
 time_as_micros({Time, mu}) ->
     Time.
+
+%% @doc Pool worker status.
+%% Returns list of proplist with attributes
+%% id, name, capacity, created, checkedout, free, available
+%%
+pool_status(#state{pools=Pools} = _State) ->
+    Ids = dict:fetch_keys(Pools),
+    [pool_status(Id, dict:fetch(Id, Pools)) || Id <- Ids].
+pool_status(Id, #pool{max_count=MaxCount,
+                      free_count=Free,
+                      in_use_count=CheckedOut} = _Pool) ->
+    Capacity = MaxCount,
+    Created = CheckedOut + Free,
+    Available = Capacity - CheckedOut,
+    [{id, Id},
+     {capacity, Capacity},
+     {created, Created},
+     {checkedout, CheckedOut},
+     {free, Free},
+     {available, Available}].
+
+%% @doc Returns a formatted string with pool status.
+%% Includes a header and total line.
+pool_status_string(#state{} = State) ->
+    StatusList = pool_status(State),
+    [pool_header_string()|
+         [pool_status_string(Status) || Status <- StatusList]]
+      ++ [pool_status_string(pool_status_total(StatusList))];
+pool_status_string(PoolStatus) ->
+    [{id, Id},
+     {capacity, Capacity},
+     {created, Created},
+     {checkedout, CheckedOut},
+     {free, Free},
+     {available, Available}] = PoolStatus,
+    io_lib:format("~-6s ~10w ~10w ~10w ~10w ~10w~n",
+           [Id, Capacity, Created, CheckedOut, Free, Available]).
+
+%% Returns a pool status proplist with special id "Total"
+%% with totals for capacity, created, checkedout, free, available.
+pool_status_total(PoolStatusList) ->
+    [TotalCapacity,
+     TotalCreated,
+     TotalCheckedOut,
+     TotalFree,
+     TotalAvailable] = sum_attributes(PoolStatusList,
+        [capacity, created, checkedout, free, available]),
+    [{id, "Total"},
+     {capacity, TotalCapacity},
+     {created, TotalCreated},
+     {checkedout, TotalCheckedOut},
+     {free, TotalFree},
+     {available, TotalAvailable}].
+
+pool_header_string() ->
+    io_lib:format("~-6s ~10s ~10s ~10s ~10s ~10s~n",
+        ["Id", "Capacity", "Created", "CheckedOut", "Free", "Available"]).
+
+%% @doc Transpose proplists, i.e.
+%%
+%% 1> transpose([[{a, 1}, {b, 2}], [{a, 3}, {b, 4}]]).
+%% [{a,[1, 3]},{b,[2,4]}]
+%%
+transpose(PropLists) ->
+    Flattened = lists:flatten(PropLists),
+    [{Key, proplists:get_all_values(Key, Flattened)}
+     || Key <- proplists:get_keys(Flattened)].
+
+%% @doc Return list of sum of each attribute
+%%
+%% 1> sum_attributes([[{a, 1}, {b, 2}], [{a, 3}, {b, 4}]], [a, b]).
+%% [4,6]
+%%
+sum_attributes(PropLists, Attributes) ->
+    Transposed = transpose(PropLists),
+    [lists:sum(proplists:get_value(Key, Transposed, [])) || Key <- Attributes].

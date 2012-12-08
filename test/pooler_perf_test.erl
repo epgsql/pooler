@@ -5,10 +5,17 @@
 
 -define(gv(X, L), proplists:get_value(X, L)).
 
-setup() ->
-    setup(10, 100, 5).
+-define(INIT_COUNT, 2).
+-define(MAX_COUNT, 10).
+-define(NUM_POOLS, 1).
+
+setup() -> 
+    setup(?INIT_COUNT, ?MAX_COUNT, ?NUM_POOLS).
 
 setup(InitCount, MaxCount, NumPools) ->
+    error_logger:info_msg("Setting up pooler. InitCount: ~w, MaxCount: ~w, " ++
+                          "NumPools: ~w, Max total processes: ~w~n",
+                          [InitCount, MaxCount, NumPools, MaxCount*NumPools]),
     MakePool = fun(I) ->
                        N = integer_to_list(I),
                        Name = "p" ++ N,
@@ -33,7 +40,8 @@ consumer_cycle(N, NumOk, NumFail) when N > 0 ->
             true = is_process_alive(P),
             pooler:return_member(P, ok),
             consumer_cycle(N - 1, NumOk + 1, NumFail);
-        _ ->
+        R ->
+            %%error_logger:error_msg("Could not take pool member: ~p.", [R]),
             consumer_cycle(N - 1, NumOk, NumFail + 1)
     end;
 consumer_cycle(0, NumOk, NumFail) ->
@@ -81,14 +89,14 @@ gather_pids([], Acc) ->
     Acc.
 
 pooler_take_return_test_() ->
+    PoolInitCount = 1,
+    PoolMaxCount = 10,
+    NumPools = 5,
     {foreach,
      % setup
      fun() ->
-             InitCount = 10,
-             MaxCount = 100,
-             NumPools = 5,
-             error_logger:delete_report_handler(error_logger_tty_h),
-             setup(InitCount, MaxCount, NumPools)
+             %%error_logger:delete_report_handler(error_logger_tty_h),
+             setup(PoolInitCount, PoolMaxCount, NumPools)
      end,
      fun(_X) ->
              application:stop(pooler)
@@ -104,18 +112,20 @@ pooler_take_return_test_() ->
 
       {"take return cycle multiple workers",
        fun() ->
-               Self = self(),
                Iter = 100,
-               Workers = 100,
-               Pids = [ consumer_worker(Iter, Self)
+               Workers = PoolMaxCount * NumPools,
+               error_logger:info_msg("Starting test with ~w workers...~n",
+                                     [Workers]),
+               Pids = [ consumer_worker(Iter, self())
                         || _I <- lists:seq(1, Workers) ],
+               error_logger:info_msg("Waiting for workers to finish...~n"),
                Res = gather_pids(Pids),
                {NumOk, NumFail} =
                    lists:foldr(fun({_, L}, {O, F}) ->
                                        {O + ?gv(ok, L), F + ?gv(fail, L)}
                                end, {0, 0}, Res),
                ?assertEqual(0, NumFail),
-               ?assertEqual(100*100, NumOk)
+               ?assertEqual(Iter*Workers, NumOk)
        end}
       ]
     }.

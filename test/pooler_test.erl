@@ -434,6 +434,92 @@ pooler_integration_test_() ->
      ]
     }.
 
+pooler_addpool_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
+    {foreach,
+     % setup
+     fun() ->
+             Pools = [[{name, "p1"},
+                       {max_count, 3},
+                       {init_count, 2},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-0"}]}}]],
+             application:set_env(pooler, pools, Pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(pooler)
+     end,
+     fun(_X) ->
+             application:stop(pooler)
+     end,
+     [
+      {"can't take member for non-existent pool",
+       fun() ->
+               P = pooler:take_member("non-existent"),
+               ?assertEqual(error_no_pool, P)
+       end},
+
+      {"works if you add the pool first",
+       fun() ->
+               PoolName = "p2",
+               PoolConfig = [{name, PoolName},
+                             {max_count, 3},
+                             {init_count, 2},
+                             {start_mfa,
+                               {pooled_gs, start_link, [{"type-1"}]}}],
+               Result = pooler:addpool(PoolConfig),
+               ?assertEqual(ok, Result),
+               P = pooler:take_member(PoolName),
+               ?assertMatch({"type-1", _Id}, pooled_gs:get_id(P)),
+               ok = pooler:return_member(P)
+       end},
+      
+      {"doesn't let you add a pool under an existing name",
+       fun() ->
+               PoolName = "p2",
+               PoolConfig = [{name, PoolName},
+                             {max_count, 3},
+                             {init_count, 2},
+                             {start_mfa,
+                               {pooled_gs, start_link, [{"type-1"}]}}],
+               Result = pooler:addpool(PoolConfig),
+               ?assertEqual(ok, Result),
+               Result2 = pooler:addpool(PoolConfig),
+               ?assertEqual({error, duplicate_pool_name}, Result2)
+       end},
+      
+      {"can add multiple pools",
+       fun() ->
+               PoolConfigs = [
+                              [{name, "p3"},
+                               {max_count, 3},
+                               {init_count, 2},
+                               {start_mfa,
+                                 {pooled_gs, start_link, [{"type-2"}]}}],
+                              [{name, "p4"},
+                               {max_count, 3},
+                               {init_count, 2},
+                               {start_mfa,
+                                 {pooled_gs, start_link, [{"type-3"}]}}]
+                             ],
+               Result = pooler:addpools(PoolConfigs),
+               ?assertEqual(ok, Result),
+               P3 = pooler:take_member("p3"),
+               ?assertMatch({"type-2", _Id}, pooled_gs:get_id(P3)),
+               P4 = pooler:take_member("p4"),
+               ?assertMatch({"type-3", _Id}, pooled_gs:get_id(P4)),
+               ok = pooler:return_member(P4)
+       end}
+      
+     ]
+    }}.
+
 time_as_millis_test_() ->
     Zeros = [ {{0, U}, 0} || U <- [min, sec, ms, mu] ],
     Ones = [{{1, min}, 60000},
