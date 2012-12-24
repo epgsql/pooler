@@ -35,7 +35,13 @@
 
           member_sup,
           all_members = dict:new()     :: dict(),
-          consumer_to_pid = dict:new() :: dict()
+          consumer_to_pid = dict:new() :: dict(),
+
+          %% The module to use for collecting metrics. If set to
+          %% 'pooler_no_metrics', then metric sending calls do
+          %% nothing. A typical value to actually capture metrics is
+          %% folsom_metrics.
+          metrics_mod = pooler_no_metrics :: atom()
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
