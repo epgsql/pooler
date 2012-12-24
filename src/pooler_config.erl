@@ -11,15 +11,22 @@
 -spec list_to_pool([{atom(), term()}]) -> #pool{}.
 list_to_pool(P) ->
     #pool{
-       name              = ?gv(name, P),
+       name              = req(name, P),
        group             = ?gv(group, P),
-       max_count         = ?gv(max_count, P),
-       init_count        = ?gv(init_count, P),
-       start_mfa         = ?gv(start_mfa, P),
+       max_count         = req(max_count, P),
+       init_count        = req(init_count, P),
+       start_mfa         = req(start_mfa, P),
        add_member_retry  = ?gv(add_member_retry, P, ?DEFAULT_ADD_RETRY),
        cull_interval     = ?gv(cull_interval, P, ?DEFAULT_CULL_INTERVAL),
        max_age           = ?gv(max_age, P, ?DEFAULT_MAX_AGE),
        metrics_mod       = ?gv(metrics_mod, P, pooler_no_metrics)}.
 
-%% TODO: consider adding some type checking logic for parsing the
-%% config to make config errors easier to track down.
+%% Return `Value' for `Key' in proplist `P' or crashes with an
+%% informative message if no value is found.
+req(Key, P) ->
+    case lists:keyfind(Key, 1, P) of
+        false ->
+            error({missing_required_config, Key, P});
+        {Key, Value} ->
+            Value
+    end.
