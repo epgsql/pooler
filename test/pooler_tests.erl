@@ -252,13 +252,13 @@ pooler_basics_test_() ->
                %% FIXME: We need to wait for pooler to process the
                %% exit message. This is ugly, will fix later.
                timer:sleep(200),                % :(
-               ExpectKeys = [<<"pooler.error_no_members_count">>,
-                             <<"pooler.events">>,
-                             <<"pooler.killed_free_count">>,
-                             <<"pooler.killed_in_use_count">>,
-                             <<"pooler.test_pool_1.free_count">>,
-                             <<"pooler.test_pool_1.in_use_count">>,
-                             <<"pooler.test_pool_1.take_rate">>],
+               ExpectKeys = lists:sort([<<"pooler.test_pool_1.error_no_members_count">>,
+                                        <<"pooler.test_pool_1.events">>,
+                                        <<"pooler.test_pool_1.free_count">>,
+                                        <<"pooler.test_pool_1.in_use_count">>,
+                                        <<"pooler.test_pool_1.killed_free_count">>,
+                                        <<"pooler.test_pool_1.killed_in_use_count">>,
+                                        <<"pooler.test_pool_1.take_rate">>]),
                Metrics = fake_metrics:get_metrics(),
                GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
                ?assertEqual(ExpectKeys, GotKeys)

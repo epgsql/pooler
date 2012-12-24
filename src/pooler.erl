@@ -269,10 +269,10 @@ add_pids(N, Pool) ->
             case NewPidCount =:= N of
                 true -> ok;
                 false ->
-                    %% FIXME: pool NAME specific
-                    error_logger:error_msg("tried to add ~B members, only added ~B~n",
-                                           [N, NewPidCount]),
-                    send_metric(<<"pooler.events">>,
+                    error_logger:error_msg("pool '~s' tried to add ~B members, only added ~B~n",
+                                           [PoolName, N, NewPidCount]),
+                    %% consider changing this to a count?
+                    send_metric(pool_metric(PoolName, events),
                                 {add_pids_failed, N, NewPidCount}, history)
             end,
             Pool1 = Pool#pool{free_pids = Free ++ NewPids,
@@ -296,8 +296,8 @@ take_member_from_pool(#pool{name = PoolName,
     send_metric(pool_metric(PoolName, take_rate), 1, meter),
     case Free of
         [] when NumInUse =:= Max ->
-            send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
-            send_metric(<<"pooler.events">>, error_no_members, history),
+            send_metric(pool_metric(PoolName, error_no_members_count), {inc, 1}, counter),
+            send_metric(pool_metric(PoolName, events), error_no_members, history),
             {error_no_members, Pool};
         [] when NumInUse < Max andalso Retries > 0 ->
             case add_pids(1, Pool) of
@@ -305,15 +305,14 @@ take_member_from_pool(#pool{name = PoolName,
                     %% add_pids may have updated our pool
                     take_member_from_pool(Pool1, From, Retries - 1);
                 {max_count_reached, _} ->
-                    %% FIXME: make pool NAME specific
-                    send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
-                    send_metric(<<"pooler.events">>, error_no_members, history),
+                    send_metric(pool_metric(PoolName, error_no_members_count), {inc, 1}, counter),
+                    send_metric(pool_metric(PoolName, events), error_no_members, history),
                     {error_no_members, Pool}
             end;
         [] when Retries =:= 0 ->
             %% max retries reached
-            %% FIXME: make pool NAME specific
-            send_metric(<<"pooler.error_no_members_count">>, {inc, 1}, counter),
+            send_metric(pool_metric(PoolName, error_no_members_count), {inc, 1}, counter),
+            send_metric(pool_metric(PoolName, events), error_no_members, history),
             {error_no_members, Pool};
         [Pid|Rest] ->
             erlang:link(From),
@@ -349,7 +348,7 @@ do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
     % removed, so use find instead of fetch and ignore missing.
     clean_group_table(Pid, Pool),
     case dict:find(Pid, AllMembers) of
-        {ok, {_PoolName, _, _}} ->
+        {ok, {PoolName, _, _}} ->
             Pool1 = remove_pid(Pid, Pool),
             case add_pids(1, Pool1) of
                 {Status, Pool2} when Status =:= ok;
@@ -358,7 +357,7 @@ do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
                 {Status, _} ->
                     erlang:error({error, "unexpected return from add_pid",
                                   Status, erlang:get_stacktrace()}),
-                    send_metric(<<"pooler.events">>, bad_return_from_add_pid,
+                    send_metric(pool_metric(PoolName, events), bad_return_from_add_pid,
                                 history)
             end;
         error ->
@@ -402,30 +401,28 @@ cpmap_remove(Pid, CPid, CPMap) ->
 %
 -spec remove_pid(pid(), #pool{}) -> #pool{}.
 remove_pid(Pid, Pool) ->
-    #pool{all_members = AllMembers,
+    #pool{name = PoolName,
+          all_members = AllMembers,
           consumer_to_pid = CPMap} = Pool,
     case dict:find(Pid, AllMembers) of
-        {ok, {_PoolName, free, _Time}} ->
+        {ok, {PoolName, free, _Time}} ->
             % remove an unused member
             FreePids = lists:delete(Pid, Pool#pool.free_pids),
             NumFree = Pool#pool.free_count - 1,
             Pool1 = Pool#pool{free_pids = FreePids, free_count = NumFree},
             exit(Pid, kill),
-            %% FIXME: make this pool NAME specific
-            send_metric(<<"pooler.killed_free_count">>, {inc, 1}, counter),
+            send_metric(pool_metric(PoolName, killed_free_count), {inc, 1}, counter),
             Pool1#pool{all_members = dict:erase(Pid, AllMembers)};
-        {ok, {_PoolName, CPid, _Time}} ->
+        {ok, {PoolName, CPid, _Time}} ->
             Pool1 = Pool#pool{in_use_count = Pool#pool.in_use_count - 1},
             exit(Pid, kill),
-            %% FIXME: also fix to make pool NAME specific
-            send_metric(<<"pooler.killed_in_use_count">>, {inc, 1}, counter),
+            send_metric(pool_metric(PoolName, killed_in_use_count), {inc, 1}, counter),
             Pool1#pool{consumer_to_pid = cpmap_remove(Pid, CPid, CPMap),
                        all_members = dict:erase(Pid, AllMembers)};
         error ->
-            %% FIXME: make msg and metric pool NAME specific
-            error_logger:error_report({unknown_pid, Pid,
+            error_logger:error_report({{pool, PoolName}, unknown_pid, Pid,
                                        erlang:get_stacktrace()}),
-            send_metric(<<"pooler.event">>, unknown_pid, history),
+            send_metric(pool_metric(PoolName, events), unknown_pid, history),
             Pool
     end.
 
@@ -535,7 +532,7 @@ send_metric(Name, Value, Type) ->
     end,
     ok.
 
--spec pool_metric(atom(), 'free_count' | 'in_use_count' | 'take_rate') -> binary().
+-spec pool_metric(atom(), atom()) -> binary().
 pool_metric(PoolName, Metric) ->
     iolist_to_binary([<<"pooler.">>, atom_to_binary(PoolName, utf8),
                       ".", atom_to_binary(Metric, utf8)]).
