@@ -12,7 +12,14 @@ start_link() ->
 init([]) ->
     %% a list of pool configs
     {ok, Config} = application:get_env(pooler, pools),
-    Pools = [ pooler_config:list_to_pool(L) || L <- Config ],
+    MetricsMod = case application:get_env(pooler, metrics_module) of
+                     {ok, Mod} ->
+                         Mod;
+                     undefined ->
+                         pooler_no_metrics
+                 end,
+    MetricsConfig = {metrics_mod, MetricsMod},
+    Pools = [ pooler_config:list_to_pool([MetricsConfig | L]) || L <- Config ],
     PoolSupSpecs = [ pool_sup_spec(Pool) || Pool <- Pools ],
     ets:new(?POOLER_GROUP_TABLE, [set, public, named_table, {write_concurrency, true}]),
     {ok, {{one_for_one, 5, 60}, PoolSupSpecs}}.

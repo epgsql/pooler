@@ -18,8 +18,8 @@ list_to_pool(P) ->
        start_mfa         = ?gv(start_mfa, P),
        add_member_retry  = ?gv(add_member_retry, P, ?DEFAULT_ADD_RETRY),
        cull_interval     = ?gv(cull_interval, P, ?DEFAULT_CULL_INTERVAL),
-       max_age           = ?gv(max_age, P, ?DEFAULT_MAX_AGE)}.
+       max_age           = ?gv(max_age, P, ?DEFAULT_MAX_AGE),
+       metrics_mod       = ?gv(metrics_mod, P, pooler_no_metrics)}.
 
 %% TODO: consider adding some type checking logic for parsing the
 %% config to make config errors easier to track down.
-
