@@ -1,7 +1,7 @@
 -define(DEFAULT_ADD_RETRY, 1).
 -define(DEFAULT_CULL_INTERVAL, {0, min}).
 -define(DEFAULT_MAX_AGE, {0, min}).
-
+-define(DEFAULT_MEMBER_START_TIMEOUT, {1, min}).
 -define(POOLER_GROUP_TABLE, pooler_group_table).
 
 -type member_info() :: {string(), free | pid(), {_, _, _}}.
@@ -36,6 +36,10 @@
           %% The supervisor used to start new members
           member_sup :: atom() | pid(),
 
+          %% The supervisor used to start starter servers that start
+          %% new members. This is what enables async member starts.
+          starter_sup :: atom() | pid(),
+
           %% Maps member pid to a tuple of the form:
           %% {MonitorRef, Status, Time},
           %% where MonitorRef is a monitor reference for the member,,
@@ -49,6 +53,12 @@
           %% reference for the consumer and MemberList is a list of
           %% members being consumed.
           consumer_to_pid = dict:new() :: dict(),
+
+          %% A list of `{References, Timestamp}' tuples representing
+          %% new member start requests that are in-flight. The
+          %% timestamp records when the start request was initiated
+          %% and is used to implement start timeout.
+          starting_members = [] :: [{reference(), erlang:timestamp()}],
 
           %% The module to use for collecting metrics. If set to
           %% 'pooler_no_metrics', then metric sending calls do
