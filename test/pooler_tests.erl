@@ -153,9 +153,14 @@ pooler_basics_test_() ->
                ?assertExit({noproc, _}, pooler:take_member(bad_pool_name))
        end},
 
-      {"pids are created on demand until max",
+      {"members creation is triggered after pool exhaustion until max",
        fun() ->
-               Pids = [pooler:take_member(test_pool_1), pooler:take_member(test_pool_1), pooler:take_member(test_pool_1)],
+               %% init count is 2
+               Pids0 = [pooler:take_member(test_pool_1), pooler:take_member(test_pool_1)],
+               %% since new member creation is async, can only assert
+               %% that we will get a pid, but may not be first try.
+               Pids = get_n_pids(1, Pids0),
+               %% pool is at max now, requests should give error
                ?assertEqual(error_no_members, pooler:take_member(test_pool_1)),
                ?assertEqual(error_no_members, pooler:take_member(test_pool_1)),
                PRefs = [ R || {_T, R} <- [ pooled_gs:get_id(P) || P <- Pids ] ],
@@ -178,8 +183,7 @@ pooler_basics_test_() ->
 
       {"if an in-use pid crashes it is replaced",
        fun() ->
-               Pids0 = [pooler:take_member(test_pool_1), pooler:take_member(test_pool_1),
-                        pooler:take_member(test_pool_1)],
+               Pids0 = get_n_pids(3, []),
                Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % crash them all
                [ pooled_gs:crash(P) || P <- Pids0 ],
@@ -199,7 +203,7 @@ pooler_basics_test_() ->
 
       {"if a pid is returned with bad status it is replaced",
        fun() ->
-               Pids0 = [pooler:take_member(test_pool_1), pooler:take_member(test_pool_1), pooler:take_member(test_pool_1)],
+               Pids0 = get_n_pids(3, []),
                Ids0 = [ pooled_gs:get_id(P) || P <- Pids0 ],
                % return them all marking as bad
                [ pooler:return_member(test_pool_1, P, fail) || P <- Pids0 ],
@@ -343,7 +347,7 @@ pooler_groups_test_() ->
 
       {"exhaust pools in group",
        fun() ->
-               Pids = [ pooler:take_group_member(group_1) || _I <- lists:seq(1, 6) ],
+               Pids = get_n_pids_group(group_1, 6, []),
                %% they should all be pids
                [ begin
                      {Type, _} = pooled_gs:get_id(P),
@@ -401,7 +405,7 @@ pooler_scheduled_cull_test_() ->
      [{"excess members are culled repeatedly",
        fun() ->
                %% take all members
-               Pids1 = [ pooler:take_member(test_pool_1) || _X <- lists:seq(1, 10) ],
+               Pids1 = get_n_pids(test_pool_1, 10, []),
                %% return all
                [ pooler:return_member(test_pool_1, P) || P <- Pids1 ],
                ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
@@ -410,7 +414,7 @@ pooler_scheduled_cull_test_() ->
                ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
 
                %% repeat the test to verify that culling gets rescheduled.
-               Pids2 = [ pooler:take_member(test_pool_1) || _X <- lists:seq(1, 10) ],
+               Pids2 = get_n_pids(test_pool_1, 10, []),
                %% return all
                [ pooler:return_member(test_pool_1, P) || P <- Pids2 ],
                ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
@@ -433,7 +437,7 @@ pooler_scheduled_cull_test_() ->
       {"in-use members are not culled",
        fun() ->
                %% take all members
-               Pids = [ pooler:take_member(test_pool_1) || _X <- lists:seq(1, 10) ],
+               Pids = get_n_pids(test_pool_1, 10, []),
                %% don't return any
                ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
                %% wait for longer than cull delay
@@ -553,12 +557,25 @@ time_as_micros_test_() ->
 % testing crash recovery means race conditions when either pids
 % haven't yet crashed or pooler hasn't recovered.  So this helper loops
 % forver until N pids are obtained, ignoring error_no_members.
-get_n_pids(0, Acc) ->
-    Acc;
 get_n_pids(N, Acc) ->
-    case pooler:take_member(test_pool_1) of
+    get_n_pids(test_pool_1, N, Acc).
+
+get_n_pids(_Pool, 0, Acc) ->
+    Acc;
+get_n_pids(Pool, N, Acc) ->
+    case pooler:take_member(Pool) of
         error_no_members ->
-            get_n_pids(N, Acc);
+            get_n_pids(Pool, N, Acc);
         Pid ->
-            get_n_pids(N - 1, [Pid|Acc])
+            get_n_pids(Pool, N - 1, [Pid|Acc])
+    end.
+
+get_n_pids_group(_Group, 0, Acc) ->
+    Acc;
+get_n_pids_group(Group, N, Acc) ->
+    case pooler:take_group_member(Group) of
+        error_no_members ->
+            get_n_pids_group(Group, N, Acc);
+        Pid ->
+            get_n_pids_group(Group, N - 1, [Pid|Acc])
     end.

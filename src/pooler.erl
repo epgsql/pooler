@@ -27,7 +27,8 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/1,
+-export([accept_member/2,
+         start_link/1,
          take_member/1,
          take_group_member/1,
          return_group_member/2,
@@ -58,6 +59,11 @@
 
 start_link(#pool{name = Name} = Pool) ->
     gen_server:start_link({local, Name}, ?MODULE, Pool, []).
+
+%% @doc For INTERNAL use. Adds `MemberPid' to the pool.
+-spec accept_member(atom() | pid(), pid() | {noproc, _}) -> ok.
+accept_member(PoolName, MemberPid) ->
+    gen_server:call(PoolName, {accept_member, MemberPid}).
 
 %% @doc Obtain exclusive access to a member from `PoolName'.
 %%
@@ -183,15 +189,18 @@ set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
 
 handle_call(take_member, {CPid, _Tag}, #pool{} = Pool) ->
-    Retries = pool_add_retries(Pool),
-    {Member, NewPool} = take_member_from_pool(Pool, CPid, Retries),
+    {Member, NewPool} = take_member_from_pool(Pool, CPid),
     {reply, Member, NewPool};
 handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
+handle_call({accept_member, Pid}, _From, Pool) ->
+    {reply, ok, do_accept_member(Pid, Pool)};
 handle_call(stop, _From, Pool) ->
     {stop, normal, stop_ok, Pool};
 handle_call(pool_stats, _From, Pool) ->
     {reply, dict:to_list(Pool#pool.all_members), Pool};
+handle_call(dump_pool, _From, Pool) ->
+    {reply, Pool, Pool};
 handle_call(_Request, _From, Pool) ->
     {noreply, Pool}.
 
@@ -244,6 +253,41 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
+do_accept_member({Ref, Pid},
+                 #pool{
+                    all_members = AllMembers,
+                    free_pids = Free,
+                    free_count = NumFree,
+                    starting_members = StartingMembers
+                   } = Pool) when is_pid(Pid) ->
+    case lists:keymember(Ref, 1, StartingMembers) of
+        false ->
+            %% a pid we didn't ask to start, ignore it.
+            %% should we log it?
+            Pool;
+        true ->
+            StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
+            MRef = erlang:monitor(process, Pid),
+            Entry = {MRef, free, os:timestamp()},
+            AllMembers1 = store_all_members(Pid, Entry, AllMembers),
+            Pool#pool{free_pids = Free ++ [Pid],
+                      free_count = NumFree + 1,
+                      all_members = AllMembers1,
+                      starting_members = StartingMembers1}
+    end;
+do_accept_member({Ref, _Reason}, #pool{starting_members = StartingMembers} = Pool) ->
+    %% member start failed, remove in-flight ref and carry on.
+    StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
+    Pool#pool{starting_members = StartingMembers1}.
+
+-spec remove_stale_starting_members([{reference(), erlang:timestamp()}], time_spec()) -> [{reference(), erlang:timestamp()}].
+remove_stale_starting_members(StartingMembers, MaxAge) ->
+    Now = calendar:time_to_seconds(os:timestamp()),
+    lists:filter(fun({_Ref, StartTime}) ->
+                         StartSecs = calendar:time_to_seconds(StartTime),
+                         (Now - StartSecs) < MaxAge
+                 end, StartingMembers).
+
 % FIXME: creation of new pids should probably happen
 % in a spawned process to avoid tying up the loop.
 -spec add_pids(non_neg_integer(), #pool{}) ->
@@ -277,37 +321,48 @@ add_pids(N, Pool) ->
             {max_count_reached, Pool}
     end.
 
--spec take_member_from_pool(#pool{}, {pid(), term()},
-                            non_neg_integer()) ->
+-spec take_member_from_pool(#pool{}, {pid(), term()}) ->
                                    {error_no_members | pid(), #pool{}}.
 take_member_from_pool(#pool{max_count = Max,
                             free_pids = Free,
                             in_use_count = NumInUse,
                             free_count = NumFree,
-                            consumer_to_pid = CPMap} = Pool,
-                      From,
-                      Retries) ->
+                            consumer_to_pid = CPMap,
+                            starting_members = StartingMembers} = Pool,
+                      From) ->
     send_metric(Pool, take_rate, 1, meter),
+    CanAdd = (NumInUse + length(StartingMembers)) < Max,
     case Free of
-        [] when NumInUse =:= Max ->
+        [] when CanAdd =:= false  ->
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
             {error_no_members, Pool};
-        [] when NumInUse < Max andalso Retries > 0 ->
-            case add_pids(1, Pool) of
-                {ok, Pool1} ->
-                    %% add_pids may have updated our pool
-                    take_member_from_pool(Pool1, From, Retries - 1);
-                {max_count_reached, _} ->
-                    send_metric(Pool, error_no_members_count, {inc, 1}, counter),
-                    send_metric(Pool, events, error_no_members, history),
-                    {error_no_members, Pool}
-            end;
-        [] when Retries =:= 0 ->
-            %% max retries reached
+        [] when CanAdd =:= true ->
+            %% request async member creation, return error for now.
+            %% also should verify that starting_members length will
+            %% not exceed max size if all come back success.  need a
+            %% reference to the starter supervisor or else we reuse a
+            %% starter for now.
+            {ok, Starter} = pooler_starter_sup:new_starter(),
+            StartRef = pooler_starter:start_member(Starter, Pool),
+            %% case add_pids(1, Pool) of
+            %%     {ok, Pool1} ->
+            %%         %% add_pids may have updated our pool
+            %%         take_member_from_pool(Pool1, From, Retries - 1);
+            %%     {max_count_reached, _} ->
+            %%         send_metric(Pool, error_no_members_count, {inc, 1}, counter),
+            %%         send_metric(Pool, events, error_no_members, history),
+            %%         {error_no_members, Pool}
+            %% end,
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
-            {error_no_members, Pool};
+            StartingMembers1 = [{StartRef, os:timestamp()} | StartingMembers],
+            {error_no_members, Pool#pool{starting_members = StartingMembers1}};
+        %% [] when Retries =:= 0 ->
+        %%     %% max retries reached
+        %%     send_metric(Pool, error_no_members_count, {inc, 1}, counter),
+        %%     send_metric(Pool, events, error_no_members, history),
+        %%     {error_no_members, Pool};
         [Pid|Rest] ->
             Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
                               free_count = NumFree - 1},
@@ -531,7 +586,7 @@ expired_free_members(Members, Now, MaxAge) ->
                   Label :: atom(),
                   Value :: metric_value(),
                   Type  :: metric_type()) -> ok.
-send_metric(#pool{metrics_mod = undefined}, _Label, _Value, _Type) ->
+send_metric(#pool{metrics_mod = pooler_no_metrics}, _Label, _Value, _Type) ->
     ok;
 send_metric(#pool{name = PoolName, metrics_mod = MetricsMod}, Label, Value, Type) ->
     MetricName = pool_metric(PoolName, Label),
@@ -542,6 +597,10 @@ send_metric(#pool{name = PoolName, metrics_mod = MetricsMod}, Label, Value, Type
 pool_metric(PoolName, Metric) ->
     iolist_to_binary([<<"pooler.">>, atom_to_binary(PoolName, utf8),
                       ".", atom_to_binary(Metric, utf8)]).
+
+-spec time_as_secs(time_spec()) -> non_neg_integer().
+time_as_secs({Time, Unit}) ->
+    time_as_micros({Time, Unit}) div 1000000.
 
 -spec time_as_millis(time_spec()) -> non_neg_integer().
 %% @doc Convert time unit into milliseconds.
