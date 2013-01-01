@@ -288,38 +288,35 @@ remove_stale_starting_members(StartingMembers, MaxAge) ->
                          (Now - StartSecs) < MaxAge
                  end, StartingMembers).
 
-% FIXME: creation of new pids should probably happen
-% in a spawned process to avoid tying up the loop.
--spec add_pids(non_neg_integer(), #pool{}) ->
-    {max_count_reached | ok, #pool{}}.
-add_pids(N, Pool) ->
-    #pool{max_count = Max, free_pids = Free,
-          in_use_count = NumInUse, free_count = NumFree,
-          member_sup = PoolSup,
-          all_members = AllMembers} = Pool,
-    Total = NumFree + NumInUse,
-    PoolName = Pool#pool.name,
-    case Total + N =< Max of
-        true ->
-            {AllMembers1, NewPids} = start_n_pids(N, PoolSup, AllMembers),
-            %% start_n_pids may return fewer than N if errors were
-            %% encountered.
-            NewPidCount = length(NewPids),
-            case NewPidCount =:= N of
-                true -> ok;
-                false ->
-                    error_logger:error_msg("pool '~s' tried to add ~B members, only added ~B~n",
-                                           [PoolName, N, NewPidCount]),
-                    %% consider changing this to a count?
-                    send_metric(Pool, events,
-                                {add_pids_failed, N, NewPidCount}, history)
-            end,
-            Pool1 = Pool#pool{free_pids = Free ++ NewPids,
-                              free_count = length(Free) + NewPidCount},
-            {ok, Pool1#pool{all_members = AllMembers1}};
+-spec add_pids(non_neg_integer(), #pool{}) -> {ok, #pool{}}.
+add_pids(N, #pool{name = PoolName,
+                  free_pids = Free,
+                  all_members = AllMembers} = Pool) ->
+    {ok, Starter} = pooler_starter_sup:new_starter(),
+    %% start N members in parallel and wait for all to start.
+    NewPids = pooler_starter:start_members_sync(Starter, Pool, N),
+    NewPidCount = length(NewPids),
+    case NewPidCount =:= N of
+        true -> ok;
         false ->
-            {max_count_reached, Pool}
-    end.
+            error_logger:error_msg("pool '~s' tried to add ~B members, only added ~B~n",
+                                   [PoolName, N, NewPidCount]),
+            %% consider changing this to a count?
+            send_metric(Pool, events,
+                        {add_pids_failed, N, NewPidCount}, history)
+    end,
+    StartTime = os:timestamp(),
+    AllMembers1 = lists:foldl(
+                    fun(MPid, Dict) ->
+                            MRef = erlang:monitor(process, MPid),
+                            Entry = {MRef, free, StartTime},
+                            store_all_members(MPid, Entry, Dict)
+                    end, AllMembers, NewPids),
+
+    Pool1 = Pool#pool{free_pids = Free ++ NewPids,
+                      free_count = length(Free) + NewPidCount,
+                      all_members = AllMembers1},
+    {ok, Pool1}.
 
 -spec take_member_from_pool(#pool{}, {pid(), term()}) ->
                                    {error_no_members | pid(), #pool{}}.
