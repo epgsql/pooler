@@ -258,8 +258,11 @@ do_accept_member({Ref, Pid},
                     all_members = AllMembers,
                     free_pids = Free,
                     free_count = NumFree,
-                    starting_members = StartingMembers
+                    starting_members = StartingMembers0
                    } = Pool) when is_pid(Pid) ->
+    %% make sure we don't accept a timedout member
+    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
+                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
     case lists:keymember(Ref, 1, StartingMembers) of
         false ->
             %% a pid we didn't ask to start, ignore it.
@@ -280,13 +283,25 @@ do_accept_member({Ref, _Reason}, #pool{starting_members = StartingMembers} = Poo
     StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
     Pool#pool{starting_members = StartingMembers1}.
 
--spec remove_stale_starting_members([{reference(), erlang:timestamp()}], time_spec()) -> [{reference(), erlang:timestamp()}].
-remove_stale_starting_members(StartingMembers, MaxAge) ->
-    Now = calendar:time_to_seconds(os:timestamp()),
-    lists:filter(fun({_Ref, StartTime}) ->
-                         StartSecs = calendar:time_to_seconds(StartTime),
-                         (Now - StartSecs) < MaxAge
+
+-spec remove_stale_starting_members(#pool{}, [{reference(), erlang:timestamp()}],
+                                    time_spec()) -> [{reference(), erlang:timestamp()}].
+remove_stale_starting_members(Pool, StartingMembers, MaxAge) ->
+    Now = os:timestamp(),
+    MaxAgeSecs = time_as_secs(MaxAge),
+    lists:filter(fun(SM) ->
+                         starting_member_not_stale(Pool, Now, SM, MaxAgeSecs)
                  end, StartingMembers).
+
+starting_member_not_stale(Pool, Now, {_Ref, StartTime}, MaxAgeSecs) ->
+    case secs_between(StartTime, Now) < MaxAgeSecs of
+        true ->
+            true;
+        false ->
+            error_logger:error_msg("pool '~s': starting member timeout", [Pool#pool.name]),
+            send_metric(Pool, starting_member_timeout, {inc, 1}, counter),
+            false
+    end.
 
 -spec add_pids(non_neg_integer(), #pool{}) -> {ok, #pool{}}.
 add_pids(N, #pool{name = PoolName,
@@ -326,9 +341,11 @@ take_member_from_pool(#pool{init_count = InitCount,
                             in_use_count = NumInUse,
                             free_count = NumFree,
                             consumer_to_pid = CPMap,
-                            starting_members = StartingMembers} = Pool,
+                            starting_members = StartingMembers0} = Pool,
                       From) ->
     send_metric(Pool, take_rate, 1, meter),
+    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
+                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
     NumCanAdd = Max - (NumInUse + NumFree + length(StartingMembers)),
     case Free of
         [] when NumCanAdd =< 0  ->
@@ -606,3 +623,6 @@ time_as_micros({Time, ms}) ->
     1000 * Time;
 time_as_micros({Time, mu}) ->
     Time.
+
+secs_between({Mega1, Secs1, _}, {Mega2, Secs2, _}) ->
+    (Mega2 - Mega1) * 1000000 + (Secs2 - Secs1).
