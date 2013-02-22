@@ -485,33 +485,6 @@ remove_pid(Pid, Pool) ->
             Pool
     end.
 
--spec start_n_pids(non_neg_integer(), pid(), dict()) -> {dict(), [pid()]}.
-start_n_pids(N, PoolSup, AllMembers) ->
-    NewPidsWith = do_n(N, fun(Acc) ->
-                                  case supervisor:start_child(PoolSup, []) of
-                                      {ok, Pid} ->
-                                          MRef = erlang:monitor(process, Pid),
-                                          [{MRef, Pid} | Acc];
-                                      _Else ->
-                                          Acc
-                                  end
-                          end, []),
-    AllMembers1 = lists:foldl(
-                    fun({MRef, Pid}, Dict) ->
-                            Entry = {MRef, free, os:timestamp()},
-                            store_all_members(Pid, Entry, Dict)
-                    end, AllMembers, NewPidsWith),
-    NewPids = [ Pid || {_MRef, Pid} <- NewPidsWith ],
-    {AllMembers1, NewPids}.
-
-do_n(0, _Fun, Acc) ->
-    Acc;
-do_n(N, Fun, Acc) ->
-    do_n(N - 1, Fun, Fun(Acc)).
-
-pool_add_retries(#pool{add_member_retry = Retries}) ->
-    Retries.
-
 -spec store_all_members(pid(),
                         {reference(), free | pid(), {_, _, _}}, dict()) -> dict().
 store_all_members(Pid, Val = {_MRef, _CPid, _Time}, AllMembers) ->
