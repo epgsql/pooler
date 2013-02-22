@@ -3,13 +3,13 @@
 [
  {pooler, [
            {pools, [
-                    [{name, "pool1"},
+                    [{name, pool1},
                      {max_count, 5},
                      {init_count, 2},
                      {start_mfa,
                       {pooled_gs, start_link, [{"p1"}]}}],
                     
-                    [{name, "pool2"},
+                    [{name, pool2},
                      {max_count, 5},
                      {init_count, 2},
                      {start_mfa,
