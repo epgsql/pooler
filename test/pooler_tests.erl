@@ -266,6 +266,13 @@ pooler_basics_test_() ->
                Metrics = fake_metrics:get_metrics(),
                GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
                ?assertEqual(ExpectKeys, GotKeys)
+       end},
+
+      {"accept bad member is handled",
+       fun() ->
+               Bad = spawn(fun() -> ok end),
+               Ref = erlang:make_ref(),
+               ?assertEqual(ok, pooler:accept_member(test_pool_1, {Ref, Bad}))
        end}
      ]}}.
 
@@ -331,6 +338,18 @@ pooler_groups_test_() ->
        fun() ->
                ?assertEqual({error, {no_such_group, not_a_group}},
                             pooler:take_group_member(not_a_group))
+       end},
+
+      {"return member to unknown group",
+       fun() ->
+               Pid = pooler:take_group_member(group_1),
+               ?assertEqual(ok, pooler:return_group_member(no_such_group, Pid))
+       end},
+
+      {"return member to wrong group",
+       fun() ->
+               Pid = pooler:take_member(test_pool_3),
+               ?assertEqual(ok, pooler:return_group_member(group_1, Pid))
        end},
 
       {"return member to group, implied ok",
@@ -470,9 +489,20 @@ random_message_test_() ->
      end,
     [
      fun() ->
+             Pid = spawn(fun() -> ok end),
+             MonMsg = {'DOWN', erlang:make_ref(), process, Pid, because},
+             test_pool_1 ! MonMsg
+     end,
+
+     fun() ->
              Pid = pooler:take_member(test_pool_1),
              {Type, _} =  pooled_gs:get_id(Pid),
              ?assertEqual("type-0", Type)
+     end,
+
+     fun() ->
+             RawPool = gen_server:call(test_pool_1, dump_pool),
+             ?assertEqual(pool, element(1, RawPool))
      end
     ]}.
 
