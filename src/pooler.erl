@@ -303,6 +303,7 @@ starting_member_not_stale(Pool, Now, {_Ref, StartTime}, MaxAgeSecs) ->
             false
     end.
 
+%% @doc Synchronously add `N' members to the pool.
 -spec add_pids(non_neg_integer(), #pool{}) -> {ok, #pool{}}.
 add_pids(N, #pool{name = PoolName,
                   free_pids = Free,
@@ -353,7 +354,6 @@ take_member_from_pool(#pool{init_count = InitCount,
             send_metric(Pool, events, error_no_members, history),
             {error_no_members, Pool};
         [] when NumCanAdd > 0 ->
-            {ok, Starter} = pooler_starter_sup:new_starter(),
             %% Limit concurrently starting members to init_count. Add
             %% up to init_count members. Starting members here means
             %% we always return an error_no_members for a take request
@@ -362,13 +362,10 @@ take_member_from_pool(#pool{init_count = InitCount,
             %% unused members culled over time (if scheduled cull is
             %% enabled).
             NumToAdd = min(InitCount - length(StartingMembers), NumCanAdd),
-            StartTime = os:timestamp(),
-            StartRefs = [ {pooler_starter:start_member(Starter, Pool), StartTime}
-                          || _I <- lists:seq(1, NumToAdd) ],
+            Pool1 = add_members_async(NumToAdd, Pool),
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
-            StartingMembers1 = StartRefs ++ StartingMembers,
-            {error_no_members, Pool#pool{starting_members = StartingMembers1}};
+            {error_no_members, Pool1};
         [Pid|Rest] ->
             Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
                               free_count = NumFree - 1},
@@ -380,6 +377,16 @@ take_member_from_pool(#pool{init_count = InitCount,
                                                       Pool1#pool.all_members)
                    }}
     end.
+
+%% @doc Add `Count' members to `Pool' asynchronously. Returns updated
+%% `Pool' record with starting member refs added to field
+%% `starting_members'.
+add_members_async(Count, #pool{starting_members = StartingMembers} = Pool) ->
+    {ok, Starter} = pooler_starter_sup:new_starter(),
+    StartTime = os:timestamp(),
+    StartRefs = [ {pooler_starter:start_member(Starter, Pool), StartTime}
+                  || _I <- lists:seq(1, Count) ],
+    Pool#pool{starting_members = StartRefs ++ StartingMembers}.
 
 -spec do_return_member(pid(), ok | fail, #pool{}) -> #pool{}.
 do_return_member(Pid, ok, #pool{all_members = AllMembers} = Pool) ->
@@ -404,16 +411,7 @@ do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
     case dict:find(Pid, AllMembers) of
         {ok, {_MRef, _, _}} ->
             Pool1 = remove_pid(Pid, Pool),
-            case add_pids(1, Pool1) of
-                {Status, Pool2} when Status =:= ok;
-                                     Status =:= max_count_reached ->
-                    Pool2;
-                {Status, _} ->
-                    erlang:error({error, "unexpected return from add_pid",
-                                  Status, erlang:get_stacktrace()}),
-                    send_metric(Pool1, events, bad_return_from_add_pid,
-                                history)
-            end;
+            add_members_async(1, Pool1);
         error ->
             Pool
     end.
