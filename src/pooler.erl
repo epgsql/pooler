@@ -178,7 +178,7 @@ init(#pool{}=Pool) ->
     MemberSup = pooler_pool_sup:member_sup_name(Pool),
     Pool1 = set_member_sup(Pool, MemberSup),
     Pool2 = cull_members_from_pool(Pool1),
-    {ok, NewPool} = add_pids(N, Pool2),
+    {ok, NewPool} = add_members_sync(N, Pool2),
     %% trigger an immediate timeout, handled by handle_info to allow
     %% us to register with pg2. We use the timeout mechanism to ensure
     %% that a server is added to a group only when it is ready to
@@ -303,11 +303,11 @@ starting_member_not_stale(Pool, Now, {_Ref, StartTime}, MaxAgeSecs) ->
             false
     end.
 
-%% @doc Synchronously add `N' members to the pool.
--spec add_pids(non_neg_integer(), #pool{}) -> {ok, #pool{}}.
-add_pids(N, #pool{name = PoolName,
-                  free_pids = Free,
-                  all_members = AllMembers} = Pool) ->
+%% @doc Synchronously add `N' members to `Pool'.
+-spec add_members_sync(non_neg_integer(), #pool{}) -> {ok, #pool{}}.
+add_members_sync(N, #pool{name = PoolName,
+                          free_pids = Free,
+                          all_members = AllMembers} = Pool) ->
     {ok, Starter} = pooler_starter_sup:new_starter(),
     %% start N members in parallel and wait for all to start.
     NewPids = pooler_starter:start_members_sync(Starter, Pool, N),
