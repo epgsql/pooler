@@ -35,7 +35,8 @@
          return_group_member/3,
          return_member/2,
          return_member/3,
-         pool_stats/1]).
+         pool_stats/1,
+         manual_start/0]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -59,6 +60,11 @@
 
 start_link(#pool{name = Name} = Pool) ->
     gen_server:start_link({local, Name}, ?MODULE, Pool, []).
+
+manual_start() ->
+    application:start(sasl),
+    application:start(crypto),
+    application:start(pooler).
 
 %% @doc For INTERNAL use. Adds `MemberPid' to the pool.
 -spec accept_member(atom() | pid(), pid() | {noproc, _}) -> ok.
