@@ -177,8 +177,10 @@ init(#pool{}=Pool) ->
     #pool{init_count = N} = Pool,
     MemberSup = pooler_pool_sup:member_sup_name(Pool),
     Pool1 = set_member_sup(Pool, MemberSup),
+    %% This schedules the next cull when the pool is configured for
+    %% such and is otherwise a no-op.
     Pool2 = cull_members_from_pool(Pool1),
-    {ok, NewPool} = add_members_sync(N, Pool2),
+    {ok, NewPool} = init_members_sync(N, Pool2),
     %% trigger an immediate timeout, handled by handle_info to allow
     %% us to register with pg2. We use the timeout mechanism to ensure
     %% that a server is added to a group only when it is ready to
@@ -303,36 +305,32 @@ starting_member_not_stale(Pool, Now, {_Ref, StartTime}, MaxAgeSecs) ->
             false
     end.
 
-%% @doc Synchronously add `N' members to `Pool'.
--spec add_members_sync(non_neg_integer(), #pool{}) -> {ok, #pool{}}.
-add_members_sync(N, #pool{name = PoolName,
-                          free_pids = Free,
-                          all_members = AllMembers} = Pool) ->
-    {ok, Starter} = pooler_starter_sup:new_starter(),
-    %% start N members in parallel and wait for all to start.
-    NewPids = pooler_starter:start_members_sync(Starter, Pool, N),
-    NewPidCount = length(NewPids),
-    case NewPidCount =:= N of
-        true -> ok;
-        false ->
-            error_logger:error_msg("pool '~s' tried to add ~B members, only added ~B~n",
-                                   [PoolName, N, NewPidCount]),
-            %% consider changing this to a count?
-            send_metric(Pool, events,
-                        {add_pids_failed, N, NewPidCount}, history)
-    end,
+init_members_sync(N, #pool{name = PoolName} = Pool) ->
+    Self = self(),
     StartTime = os:timestamp(),
-    AllMembers1 = lists:foldl(
-                    fun(MPid, Dict) ->
-                            MRef = erlang:monitor(process, MPid),
-                            Entry = {MRef, free, StartTime},
-                            store_all_members(MPid, Entry, Dict)
-                    end, AllMembers, NewPids),
+    StartRefs = [ {pooler_starter:start_member(Pool, Self), StartTime}
+                  || _I <- lists:seq(1, N) ],
+    Pool1 = Pool#pool{starting_members = StartRefs},
+    case collect_init_members(Pool1) of
+        timeout ->
+            error_logger:error_msg("pool '~s': exceeded timeout waiting for ~B members",
+                                   [PoolName, Pool1#pool.init_count]),
+            error({timeout, "unable to start members"});
+        #pool{} = Pool2 ->
+            {ok, Pool2}
+    end.
 
-    Pool1 = Pool#pool{free_pids = Free ++ NewPids,
-                      free_count = length(Free) + NewPidCount,
-                      all_members = AllMembers1},
-    {ok, Pool1}.
+collect_init_members(#pool{starting_members = []} = Pool) ->
+    Pool;
+collect_init_members(#pool{} = Pool) ->
+    Timeout = time_as_millis(?DEFAULT_MEMBER_START_TIMEOUT),
+    receive
+        {accept_member, {Ref, Member}} ->
+            collect_init_members(do_accept_member({Ref, Member}, Pool))
+    after
+        Timeout ->
+            timeout
+    end.
 
 -spec take_member_from_pool(#pool{}, {pid(), term()}) ->
                                    {error_no_members | pid(), #pool{}}.
@@ -382,9 +380,8 @@ take_member_from_pool(#pool{init_count = InitCount,
 %% `Pool' record with starting member refs added to field
 %% `starting_members'.
 add_members_async(Count, #pool{starting_members = StartingMembers} = Pool) ->
-    {ok, Starter} = pooler_starter_sup:new_starter(),
     StartTime = os:timestamp(),
-    StartRefs = [ {pooler_starter:start_member(Starter, Pool), StartTime}
+    StartRefs = [ {pooler_starter:start_member(Pool), StartTime}
                   || _I <- lists:seq(1, Count) ],
     Pool#pool{starting_members = StartRefs ++ StartingMembers}.
 
