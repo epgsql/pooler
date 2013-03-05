@@ -12,8 +12,10 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/0,
-         start_member/2]).
+-export([start_link/3,
+         start_member/1,
+         start_member/2,
+         stop/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -35,102 +37,66 @@
 %% API Function Definitions
 %% ------------------------------------------------------------------
 
-start_link() ->
-    gen_server:start_link(?MODULE, [], []).
+start_link(Pool, Ref, Parent) ->
+    gen_server:start_link(?MODULE, {Pool, Ref, Parent}, []).
+
+stop(Starter) ->
+    gen_server:call(Starter, stop).
 
 %% @doc Start a member for the specified `Pool'.
 %%
-%% The start member request is a sent as a cast to the starter
-%% server. The starter server mailbox is treated as the member start
-%% work queue. Members are started serially and sent back to the
-%% requesting pool via `pooler:accept_member/2'. It is expected that
-%% callers keep track of, and limit, their start requests so that the
-%% starters queue doesn't grow unbounded. A likely enhancement would
-%% be to allow parallel starts either by having the starter spawn a
-%% subprocess and manage or by using pg2 to group a number of starter
-%% servers. Note that timeout could be handled client-side using the
-%% `gen_server:call/3' timeout value.
--spec start_member(atom() | pid(), #pool{}) -> reference().
-start_member(Starter, #pool{} = Pool) ->
+%% Member creation with this call is async. This function returns
+%% immediately with a reference. When the member has been created it
+%% is sent to the specified pool via {@link pooler:accept_member/2}.
+%%
+%% Each call starts a single use `pooler_starter' instance via
+%% `pooler_starter_sup'. The instance terminates normally after
+%% creating a single member.
+-spec start_member(#pool{}) -> reference().
+start_member(Pool) ->
     Ref = make_ref(),
-    gen_server:cast(Starter, {start_member, Pool, Ref}),
+    {ok, _Pid} = pooler_starter_sup:new_starter(Pool, Ref, pool),
     Ref.
 
-%% @doc Start `Count' members in parallel and return a list of created
-%% members. The returned list may contain fewer than `Count' members
-%% if errors occured for some member starts.
--spec start_members_sync(atom() | pid(), #pool{},
-                         non_neg_integer()) -> [pid()].
-start_members_sync(Starter, #pool{} = Pool, Count) ->
-    gen_server:call(Starter, {start_members_sync, Pool, Count}, infinity).
+%% @doc Same as {@link start_member/1} except that instead of calling
+%% {@link pooler:accept_member/2} a raw message is sent to `Parent' of
+%% the form `{accept_member, {Ref, Member}'. Where `Member' will
+%% either be the member pid or an error term and `Ref' will be the
+%% reference returned from this function.
+%%
+%% This is used by the init function in the `pooler' to start the
+%% initial set of pool members in parallel.
+start_member(Pool, Parent) ->
+    Ref = make_ref(),
+    {ok, _Pid} = pooler_starter_sup:new_starter(Pool, Ref, Parent),
+    Ref.
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
+-record(starter, {pool,
+                  ref,
+                  parent}).
 
--spec init([]) -> {'ok', {}}.
-init([]) ->
-    {ok, {}}.
+-spec init({#pool{}, reference(), pid() | atom()}) -> {'ok', #starter{}, 0}.
+init({Pool, Ref, Parent}) ->
+    %% trigger immediate timeout message, which we'll use to trigger
+    %% the member start.
+    {ok, #starter{pool = Pool, ref = Ref, parent = Parent}, 0}.
 
-handle_call({start_members_sync, Pool, Count}, _From, State) ->
-    {reply, do_start_members_sync(Pool, Count), State};
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(_Request, _From, State) ->
     {noreply, State}.
 
-handle_cast({start_member, Pool, Ref}, State) ->
-    ok = do_start_member(Pool, Ref),
+handle_cast(_Request, State) ->
     {noreply, State}.
 
-do_start_member(#pool{name = PoolName,
-                      member_sup = PoolSup},
-                Ref) ->
-    case supervisor:start_child(PoolSup, []) of
-        {ok, Pid} ->
-            ok = pooler:accept_member(PoolName, {Ref, Pid}),
-            ok;
-        Error ->
-            error_logger:error_msg("pool '~s' failed to start member: ~p",
-                                   [PoolName, Error]),
-            pooler:accept_member(PoolName, {Ref, Error}),
-            ok
-    end.
-
-do_start_members_sync(#pool{name = PoolName,
-                            member_sup = PoolSup}, Count) ->
-    Parent = self(),
-    StarterPids = [ launch_starter(Parent, PoolName, PoolSup)
-                    || _I <- lists:seq(1, Count) ],
-    gather_pids(StarterPids, []).
-
-launch_starter(Parent, PoolName, PoolSup) ->
-    proc_lib:spawn_link(fun() ->
-                                Result = start_or_log_error(PoolName, PoolSup),
-                                Parent ! {self(), Result}
-                        end).
-
-start_or_log_error(PoolName, PoolSup) ->
-    case supervisor:start_child(PoolSup, []) of
-        {ok, Pid} ->
-            {ok, Pid};
-        Error ->
-            error_logger:error_msg("pool '~s' failed to start member: ~p",
-                                   [PoolName, Error]),
-            error
-    end.
-
-gather_pids([Pid|Rest], Acc) ->
-    receive
-        {Pid, error} ->
-            gather_pids(Rest, Acc);
-        {Pid, {ok, MemberPid}} ->
-            gather_pids(Rest, [MemberPid | Acc])
-    end;
-gather_pids([], Acc) ->
-    Acc.
-
 -spec handle_info(_, _) -> {'noreply', _}.
+handle_info(timeout,
+            #starter{pool = Pool, ref = Ref, parent = Parent} = State) ->
+    ok = do_start_member(Pool, Ref, Parent),
+    {stop, normal, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -141,3 +107,21 @@ terminate(_Reason, _State) ->
 -spec code_change(_, _, _) -> {'ok', _}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+do_start_member(#pool{name = PoolName, member_sup = PoolSup}, Ref, Parent) ->
+    Msg = case supervisor:start_child(PoolSup, []) of
+              {ok, Pid} ->
+                  {Ref, Pid};
+              Error ->
+                  error_logger:error_msg("pool '~s' failed to start member: ~p",
+                                         [PoolName, Error]),
+                  {Ref, Error}
+          end,
+    send_accept_member(Parent, PoolName, Msg),
+    ok.
+
+send_accept_member(pool, PoolName, Msg) ->
+    pooler:accept_member(PoolName, Msg);
+send_accept_member(Pid, _PoolName, Msg) ->
+    Pid ! {accept_member, Msg},
+    ok.
