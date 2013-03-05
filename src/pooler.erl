@@ -280,8 +280,10 @@ do_accept_member({Ref, Pid},
                       all_members = AllMembers1,
                       starting_members = StartingMembers1}
     end;
-do_accept_member({Ref, _Reason}, #pool{starting_members = StartingMembers} = Pool) ->
+do_accept_member({Ref, _Reason}, #pool{starting_members = StartingMembers0} = Pool) ->
     %% member start failed, remove in-flight ref and carry on.
+    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
+                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
     StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
     Pool#pool{starting_members = StartingMembers1}.
 
