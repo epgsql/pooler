@@ -20,3 +20,6 @@ clean:
 
 distclean: clean
 	@rebar delete-deps
+
+demo_shell: compile test
+	@erl -pa .eunit ebin -config pooler-example -s pooler manual_start
