@@ -63,7 +63,6 @@ start_link(#pool{name = Name} = Pool) ->
 
 manual_start() ->
     application:start(sasl),
-    application:start(crypto),
     application:start(pooler).
 
 %% @doc For INTERNAL use. Adds `MemberPid' to the pool.
@@ -91,7 +90,8 @@ take_group_member(GroupName) ->
         Members ->
             %% Put a random member at the front of the list and then
             %% return the first member you can walking the list.
-            Idx = crypto:rand_uniform(1, length(Members) + 1),
+            {_, _, X} = erlang:now(),
+            Idx = (X rem length(Members)) + 1,
             {Pid, Rest} = extract_nth(Idx, Members),
             take_first_member([Pid | Rest])
     end.

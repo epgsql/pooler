@@ -5,8 +5,7 @@
   {registered, []},
   {applications, [
                   kernel,
-                  stdlib,
-                  crypto
+                  stdlib
                  ]},
   {mod, { pooler_app, []}},
   {env, []}
