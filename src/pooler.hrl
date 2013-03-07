@@ -33,8 +33,21 @@
           %% The maximum age for members.
           max_age = ?DEFAULT_MAX_AGE             :: time_spec(),
 
-          member_sup,
+          %% The supervisor used to start new members
+          member_sup :: atom() | pid(),
+
+          %% Maps member pid to a tuple of the form:
+          %% {MonitorRef, Status, Time},
+          %% where MonitorRef is a monitor reference for the member,,
+          %% Status is either 'free' or the consumer pid, and Time is
+          %% an Erlang timestamp that records when the member became
+          %% free.
           all_members = dict:new()     :: dict(),
+
+          %% Maps consumer pid to a tuple of the form:
+          %% {MonitorRef, MemberList} where MonitorRef is a monitor
+          %% reference for the consumer and MemberList is a list of
+          %% members being consumed.
           consumer_to_pid = dict:new() :: dict(),
 
           %% The module to use for collecting metrics. If set to
