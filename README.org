@@ -11,8 +11,8 @@ with exclusive access to pool members using =pooler:take_member=.
 
 *** Protects the members of a pool from being used concurrently
 
-The main pooler interface is =pooler:take_member/0= and
-=pooler:return_member/2=.  The pooler server will keep track of which
+The main pooler interface is =pooler:take_member/1= and
+=pooler:return_member/3=.  The pooler server will keep track of which
 members are *in use* and which are *free*.  There is no need to call
 =pooler:return_member= if the consumer is a short-lived process; in
 this case, pooler will detect the consumer's normal exit and reclaim
@@ -25,25 +25,26 @@ out the member pid to another worker process.
 
 You specify an initial and a maximum number of members in the pool.
 Pooler will create new members on demand until the maximum member
-count is reached.  New pool members are added to replace member that
+count is reached.  New pool members are added to replace members that
 crash.  If a consumer crashes, the member it was using will be
 destroyed and replaced.  You can configure Pooler to periodically
-check for and remove members that have not been used recently using to
+check for and remove members that have not been used recently to
 reduce the member count back to its initial size.
 
 *** Manage multiple pools
 
-A common configuration is to have each pool contain client processes
-connected to a particular node in a cluster (think database read
-slaves).  Pooler will randomly select a pool to fetch a member from.
-If the randomly selected pool has no free members, pooler will select
-a member from the pool with the most free members.  If there is no
-pool with available members, pooler will return =error_no_members=.
-
-You can ask for a member from a specified pool using
-=pooler:take_member/1=. If ensure your code always asks for members by
-pool name, you can use pooler to pool clients for different backend
-services.
+You can use pooler to manage multiple independent pools and multiple
+grouped pools. Independent pools allow you to pool clients for
+different backend services (e.g. postgresql and redis). Grouped pools
+can optionally be accessed using =pooler:take_group_member/1= to
+provide load balancing of the pools in the group. A typical use of
+grouped pools is to have each pool contain clients connected to a
+particular node in a cluster (think database read slaves).  Pooler's
+=take_group_member= function will randomly select a pool in the group
+to fetch a member from.  If the randomly selected pool has no free
+members, pooler will attempt to obtain a member from each pool in the
+group.  If there is no pool with available members, pooler will return
+=error_no_members=.
 
 ** Motivation
 
@@ -70,6 +71,10 @@ continue in the face of Riak node failures, consumers should spread
 their requests across clients connected to each node.  The client pool
 provides an easy way to load balance.
 
+Since writing pooler, I've seen it used to pool database connections
+for PostgreSQL, MySQL, and Redis. These uses led to a redesign to
+better support multiple independent pools.
+
 ** Usage and API
 
 *** Pool Configuration
@@ -77,8 +82,9 @@ provides an easy way to load balance.
 Pool configuration is specified in the pooler application's
 environment.  This can be provided in a config file using =-config= or
 set at startup using =application:set_env(pooler, pools,
-Pools)=. Here's an example config file that creates three pools of
-Riak pb clients each talking to a different node in a local cluster:
+Pools)=. Here's an example config file that creates two pools of
+Riak pb clients each talking to a different node in a local cluster
+and one pool talking to a Postgresql database:
 
 #+BEGIN_SRC erlang
   % pooler.config
@@ -88,23 +94,25 @@ Riak pb clients each talking to a different node in a local cluster:
   [
    {pooler, [
            {pools, [
-                    [{name, "rc8081"},
+                    [{name, rc8081},
+                     {group, riak},
                      {max_count, 5},
                      {init_count, 2},
                      {start_mfa,
                       {riakc_pb_socket, start_link, ["localhost", 8081]}}],
 
-                    [{name, "rc8082"},
+                    [{name, rc8082},
+                     {group, riak},
                      {max_count, 5},
                      {init_count, 2},
                      {start_mfa,
                       {riakc_pb_socket, start_link, ["localhost", 8082]}}],
 
-                    [{name, "rc8083"},
-                     {max_count, 5},
+                    [{name, pg_db1},
+                     {max_count, 10},
                      {init_count, 2},
                      {start_mfa,
-                      {riakc_pb_socket, start_link, ["localhost", 8083]}}]
+                      {my_pg_sql_driver, start_link, ["db_host"]}}]
                    ]}
              %% if you want to enable metrics, set this to a module with
              %% an API conformant to the folsom_metrics module.
@@ -114,10 +122,12 @@ Riak pb clients each talking to a different node in a local cluster:
   ].
 #+END_SRC
 
-Each pool has a unique name, an initial and maximum number of members,
+Each pool has a unique name, specified as an atom, an initial and maximum number of members,
 and an ={M, F, A}= describing how to start members of the pool.  When
 pooler starts, it will create members in each pool according to
-=init_count=.
+=init_count=. Optionally, you can indicate that a pool is part of a
+group. You can use pooler to load balance across pools labeled with
+the same group tag.
 
 **** Culling stale members
 
@@ -135,7 +145,7 @@ examples are valid:
 #+END_SRC
 
 The =cull_interval= determines the schedule when a check will be made
-for stale members. Checks are scheduling using =erlang:send_after/3=
+for stale members. Checks are scheduled using =erlang:send_after/3=
 which provides a light-weight timing mechanism. The next check is
 scheduled after the prior check completes.
 
@@ -163,23 +173,29 @@ Here's an example session:
 
 #+BEGIN_SRC erlang
 application:start(pooler).
-P = pooler:take_member(),
+P = pooler:take_member(mysql),
 % use P
-pooler:return_member(P, ok).
+pooler:return_member(mysql, P, ok).
 #+END_SRC
 
 Once started, the main interaction you will have with pooler is
-through two functions, =take_member/0= (or =take_member/1=) and
-=return_member/2= (or =return_member/1=).
+through two functions, =take_member/1= and =return_member/3= (or
+=return_member/2=).
 
-Call =pooler:take_member()= to obtain a member from a randomly
-selected pool.  When you are done with it, return it to the pool using
-=pooler:return_member(Pid, ok)=.  If you encountered an error using
-the member, you can pass =fail= as the second argument.  In this case,
-pooler will permanently remove that member from the pool and start a
-new member to replace it.  If your process is short lived, you can
-omit the call to =return_member=.  In this case, pooler will detect
-the normal exit of the consumer and reclaim the member.
+Call =pooler:take_member(Pool)= to obtain the pid belonging to a
+member of the pool =Pool=.  When you are done with it, return it to
+the pool using =pooler:return_member(Pool, Pid, ok)=.  If you
+encountered an error using the member, you can pass =fail= as the
+second argument.  In this case, pooler will permanently remove that
+member from the pool and start a new member to replace it.  If your
+process is short lived, you can omit the call to =return_member=.  In
+this case, pooler will detect the normal exit of the consumer and
+reclaim the member.
+
+If you would like to obtain a member from a randomly selected pool in
+a group, call =pooler:take_group_member(Group)=. This will return a
+={Pool, Pid}= pair. You will need the =Pool= value to return the
+member to its pool.
 
 *** pooler as an included application
 
@@ -191,7 +207,7 @@ cause problems. One way to work around this is to specify pooler as an
 included application in your app. This means you will call pooler's
 top-level supervisor in your app's top-level supervisor and can regain
 control over the application start order. To do this, you would remove
-pooler from the list of applications in your_app.app add
+pooler from the list of applications in your_app.app and add
 it to the included_application key:
 
 #+BEGIN_SRC erlang
@@ -264,6 +280,31 @@ When enabled, the following metrics will be tracked:
    7> pooler:return_member(M2).
    ok
    #+END_EXAMPLE
+
+** Implementation Notes
+*** Overview of supervision
+
+The top-level supervisor is pooler_sup. It supervises one supervisor
+for each pool configured in pooler's app config.
+
+At startup, a pooler_NAME_pool_sup is started for each pool described in
+pooler's app config with NAME matching the name attribute of the
+config.
+
+The pooler_NAME_pool_sup starts the gen_server that will register with
+pooler_NAME_pool as well as a pooler_pooled_worker_sup that will be
+used to start and supervise the members of this pool.
+
+pooler_sup:                one_for_one
+pooler_NAME_pool_sup:      all_for_one
+pooler_pooled_worker_sup:  simple_one_for_one
+
+Groups of pools are managed using the pg2 application. This imposes a
+requirement to set a configuration parameter on the kernel application
+in an OTP release. Like this in sys.config:
+#+begin_src erlang
+{kernel, [{start_pg2, true}]}
+#+end_src
 
 ** License
 Pooler is licensed under the Apache License Version 2.0.  See the
