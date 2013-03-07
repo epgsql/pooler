@@ -87,24 +87,24 @@ take_group_member(GroupName) ->
     case pg2:get_local_members(GroupName) of
         {error, {no_such_group, GroupName}} = Error ->
             Error;
-        Members ->
+        Pools ->
             %% Put a random member at the front of the list and then
             %% return the first member you can walking the list.
             {_, _, X} = erlang:now(),
-            Idx = (X rem length(Members)) + 1,
-            {Pid, Rest} = extract_nth(Idx, Members),
-            take_first_member([Pid | Rest])
+            Idx = (X rem length(Pools)) + 1,
+            {PoolPid, Rest} = extract_nth(Idx, Pools),
+            take_first_pool([PoolPid | Rest])
     end.
 
-take_first_member([Pid | Rest]) ->
-    case take_member(Pid) of
+take_first_pool([PoolPid | Rest]) ->
+    case take_member(PoolPid) of
         error_no_members ->
-            take_first_member(Rest);
+            take_first_pool(Rest);
         Member ->
-            ets:insert(?POOLER_GROUP_TABLE, {Member, Pid}),
+            ets:insert(?POOLER_GROUP_TABLE, {Member, PoolPid}),
             Member
     end;
-take_first_member([]) ->
+take_first_pool([]) ->
     error_no_members.
 
 %% this helper function returns `{Nth_Elt, Rest}' where `Nth_Elt' is
