@@ -84,7 +84,7 @@ pooler_take_return_test_() ->
     {foreach,
      % setup
      fun() ->
-             InitCount = 10,
+             InitCount = 100,
              MaxCount = 100,
              NumPools = 5,
              error_logger:delete_report_handler(error_logger_tty_h),
@@ -114,6 +114,9 @@ pooler_take_return_test_() ->
                    lists:foldr(fun({_, L}, {O, F}) ->
                                        {O + ?gv(ok, L), F + ?gv(fail, L)}
                                end, {0, 0}, Res),
+               %% not sure what to test here now. We expect some
+               %% failures if init count is less than max count
+               %% because of async start.
                ?assertEqual(0, NumFail),
                ?assertEqual(100*100, NumOk)
        end}

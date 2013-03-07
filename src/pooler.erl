@@ -27,14 +27,16 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/1,
+-export([accept_member/2,
+         start_link/1,
          take_member/1,
          take_group_member/1,
          return_group_member/2,
          return_group_member/3,
          return_member/2,
          return_member/3,
-         pool_stats/1]).
+         pool_stats/1,
+         manual_start/0]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -58,6 +60,16 @@
 
 start_link(#pool{name = Name} = Pool) ->
     gen_server:start_link({local, Name}, ?MODULE, Pool, []).
+
+manual_start() ->
+    application:start(sasl),
+    application:start(crypto),
+    application:start(pooler).
+
+%% @doc For INTERNAL use. Adds `MemberPid' to the pool.
+-spec accept_member(atom() | pid(), pid() | {noproc, _}) -> ok.
+accept_member(PoolName, MemberPid) ->
+    gen_server:call(PoolName, {accept_member, MemberPid}).
 
 %% @doc Obtain exclusive access to a member from `PoolName'.
 %%
@@ -171,8 +183,10 @@ init(#pool{}=Pool) ->
     #pool{init_count = N} = Pool,
     MemberSup = pooler_pool_sup:member_sup_name(Pool),
     Pool1 = set_member_sup(Pool, MemberSup),
+    %% This schedules the next cull when the pool is configured for
+    %% such and is otherwise a no-op.
     Pool2 = cull_members_from_pool(Pool1),
-    {ok, NewPool} = add_pids(N, Pool2),
+    {ok, NewPool} = init_members_sync(N, Pool2),
     %% trigger an immediate timeout, handled by handle_info to allow
     %% us to register with pg2. We use the timeout mechanism to ensure
     %% that a server is added to a group only when it is ready to
@@ -183,15 +197,18 @@ set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
 
 handle_call(take_member, {CPid, _Tag}, #pool{} = Pool) ->
-    Retries = pool_add_retries(Pool),
-    {Member, NewPool} = take_member_from_pool(Pool, CPid, Retries),
+    {Member, NewPool} = take_member_from_pool(Pool, CPid),
     {reply, Member, NewPool};
 handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
+handle_call({accept_member, Pid}, _From, Pool) ->
+    {reply, ok, do_accept_member(Pid, Pool)};
 handle_call(stop, _From, Pool) ->
     {stop, normal, stop_ok, Pool};
 handle_call(pool_stats, _From, Pool) ->
     {reply, dict:to_list(Pool#pool.all_members), Pool};
+handle_call(dump_pool, _From, Pool) ->
+    {reply, Pool, Pool};
 handle_call(_Request, _From, Pool) ->
     {noreply, Pool}.
 
@@ -244,70 +261,117 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
-% FIXME: creation of new pids should probably happen
-% in a spawned process to avoid tying up the loop.
--spec add_pids(non_neg_integer(), #pool{}) ->
-    {max_count_reached | ok, #pool{}}.
-add_pids(N, Pool) ->
-    #pool{max_count = Max, free_pids = Free,
-          in_use_count = NumInUse, free_count = NumFree,
-          member_sup = PoolSup,
-          all_members = AllMembers} = Pool,
-    Total = NumFree + NumInUse,
-    PoolName = Pool#pool.name,
-    case Total + N =< Max of
-        true ->
-            {AllMembers1, NewPids} = start_n_pids(N, PoolSup, AllMembers),
-            %% start_n_pids may return fewer than N if errors were
-            %% encountered.
-            NewPidCount = length(NewPids),
-            case NewPidCount =:= N of
-                true -> ok;
-                false ->
-                    error_logger:error_msg("pool '~s' tried to add ~B members, only added ~B~n",
-                                           [PoolName, N, NewPidCount]),
-                    %% consider changing this to a count?
-                    send_metric(Pool, events,
-                                {add_pids_failed, N, NewPidCount}, history)
-            end,
-            Pool1 = Pool#pool{free_pids = Free ++ NewPids,
-                              free_count = length(Free) + NewPidCount},
-            {ok, Pool1#pool{all_members = AllMembers1}};
+do_accept_member({Ref, Pid},
+                 #pool{
+                    all_members = AllMembers,
+                    free_pids = Free,
+                    free_count = NumFree,
+                    starting_members = StartingMembers0
+                   } = Pool) when is_pid(Pid) ->
+    %% make sure we don't accept a timedout member
+    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
+                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
+    case lists:keymember(Ref, 1, StartingMembers) of
         false ->
-            {max_count_reached, Pool}
+            %% a pid we didn't ask to start, ignore it.
+            %% should we log it?
+            Pool;
+        true ->
+            StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
+            MRef = erlang:monitor(process, Pid),
+            Entry = {MRef, free, os:timestamp()},
+            AllMembers1 = store_all_members(Pid, Entry, AllMembers),
+            Pool#pool{free_pids = Free ++ [Pid],
+                      free_count = NumFree + 1,
+                      all_members = AllMembers1,
+                      starting_members = StartingMembers1}
+    end;
+do_accept_member({Ref, _Reason}, #pool{starting_members = StartingMembers0} = Pool) ->
+    %% member start failed, remove in-flight ref and carry on.
+    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
+                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
+    StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
+    Pool#pool{starting_members = StartingMembers1}.
+
+
+-spec remove_stale_starting_members(#pool{}, [{reference(), erlang:timestamp()}],
+                                    time_spec()) -> [{reference(), erlang:timestamp()}].
+remove_stale_starting_members(Pool, StartingMembers, MaxAge) ->
+    Now = os:timestamp(),
+    MaxAgeSecs = time_as_secs(MaxAge),
+    lists:filter(fun(SM) ->
+                         starting_member_not_stale(Pool, Now, SM, MaxAgeSecs)
+                 end, StartingMembers).
+
+starting_member_not_stale(Pool, Now, {_Ref, StartTime}, MaxAgeSecs) ->
+    case secs_between(StartTime, Now) < MaxAgeSecs of
+        true ->
+            true;
+        false ->
+            error_logger:error_msg("pool '~s': starting member timeout", [Pool#pool.name]),
+            send_metric(Pool, starting_member_timeout, {inc, 1}, counter),
+            false
     end.
 
--spec take_member_from_pool(#pool{}, {pid(), term()},
-                            non_neg_integer()) ->
+init_members_sync(N, #pool{name = PoolName} = Pool) ->
+    Self = self(),
+    StartTime = os:timestamp(),
+    StartRefs = [ {pooler_starter:start_member(Pool, Self), StartTime}
+                  || _I <- lists:seq(1, N) ],
+    Pool1 = Pool#pool{starting_members = StartRefs},
+    case collect_init_members(Pool1) of
+        timeout ->
+            error_logger:error_msg("pool '~s': exceeded timeout waiting for ~B members",
+                                   [PoolName, Pool1#pool.init_count]),
+            error({timeout, "unable to start members"});
+        #pool{} = Pool2 ->
+            {ok, Pool2}
+    end.
+
+collect_init_members(#pool{starting_members = []} = Pool) ->
+    Pool;
+collect_init_members(#pool{} = Pool) ->
+    Timeout = time_as_millis(?DEFAULT_MEMBER_START_TIMEOUT),
+    receive
+        {accept_member, {Ref, Member}} ->
+            collect_init_members(do_accept_member({Ref, Member}, Pool))
+    after
+        Timeout ->
+            timeout
+    end.
+
+-spec take_member_from_pool(#pool{}, {pid(), term()}) ->
                                    {error_no_members | pid(), #pool{}}.
-take_member_from_pool(#pool{max_count = Max,
+take_member_from_pool(#pool{init_count = InitCount,
+                            max_count = Max,
                             free_pids = Free,
                             in_use_count = NumInUse,
                             free_count = NumFree,
-                            consumer_to_pid = CPMap} = Pool,
-                      From,
-                      Retries) ->
+                            consumer_to_pid = CPMap,
+                            starting_members = StartingMembers0} = Pool,
+                      From) ->
     send_metric(Pool, take_rate, 1, meter),
+    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
+                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
+    NumCanAdd = Max - (NumInUse + NumFree + length(StartingMembers)),
     case Free of
-        [] when NumInUse =:= Max ->
+        [] when NumCanAdd =< 0  ->
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
             {error_no_members, Pool};
-        [] when NumInUse < Max andalso Retries > 0 ->
-            case add_pids(1, Pool) of
-                {ok, Pool1} ->
-                    %% add_pids may have updated our pool
-                    take_member_from_pool(Pool1, From, Retries - 1);
-                {max_count_reached, _} ->
-                    send_metric(Pool, error_no_members_count, {inc, 1}, counter),
-                    send_metric(Pool, events, error_no_members, history),
-                    {error_no_members, Pool}
-            end;
-        [] when Retries =:= 0 ->
-            %% max retries reached
+        [] when NumCanAdd > 0 ->
+            %% Limit concurrently starting members to init_count. Add
+            %% up to init_count members. Starting members here means
+            %% we always return an error_no_members for a take request
+            %% when all members are in-use. By adding a batch of new
+            %% members, the pool should reach a steady state with
+            %% unused members culled over time (if scheduled cull is
+            %% enabled).
+            NumToAdd = min(InitCount - length(StartingMembers), NumCanAdd),
+            Pool1 = add_members_async(NumToAdd, Pool),
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
-            {error_no_members, Pool};
+            {error_no_members, Pool1};
         [Pid|Rest] ->
             Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
                               free_count = NumFree - 1},
@@ -319,6 +383,15 @@ take_member_from_pool(#pool{max_count = Max,
                                                       Pool1#pool.all_members)
                    }}
     end.
+
+%% @doc Add `Count' members to `Pool' asynchronously. Returns updated
+%% `Pool' record with starting member refs added to field
+%% `starting_members'.
+add_members_async(Count, #pool{starting_members = StartingMembers} = Pool) ->
+    StartTime = os:timestamp(),
+    StartRefs = [ {pooler_starter:start_member(Pool), StartTime}
+                  || _I <- lists:seq(1, Count) ],
+    Pool#pool{starting_members = StartRefs ++ StartingMembers}.
 
 -spec do_return_member(pid(), ok | fail, #pool{}) -> #pool{}.
 do_return_member(Pid, ok, #pool{all_members = AllMembers} = Pool) ->
@@ -343,16 +416,7 @@ do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
     case dict:find(Pid, AllMembers) of
         {ok, {_MRef, _, _}} ->
             Pool1 = remove_pid(Pid, Pool),
-            case add_pids(1, Pool1) of
-                {Status, Pool2} when Status =:= ok;
-                                     Status =:= max_count_reached ->
-                    Pool2;
-                {Status, _} ->
-                    erlang:error({error, "unexpected return from add_pid",
-                                  Status, erlang:get_stacktrace()}),
-                    send_metric(Pool1, events, bad_return_from_add_pid,
-                                history)
-            end;
+            add_members_async(1, Pool1);
         error ->
             Pool
     end.
@@ -423,33 +487,6 @@ remove_pid(Pid, Pool) ->
             send_metric(Pool, events, unknown_pid, history),
             Pool
     end.
-
--spec start_n_pids(non_neg_integer(), pid(), dict()) -> {dict(), [pid()]}.
-start_n_pids(N, PoolSup, AllMembers) ->
-    NewPidsWith = do_n(N, fun(Acc) ->
-                                  case supervisor:start_child(PoolSup, []) of
-                                      {ok, Pid} ->
-                                          MRef = erlang:monitor(process, Pid),
-                                          [{MRef, Pid} | Acc];
-                                      _Else ->
-                                          Acc
-                                  end
-                          end, []),
-    AllMembers1 = lists:foldl(
-                    fun({MRef, Pid}, Dict) ->
-                            Entry = {MRef, free, os:timestamp()},
-                            store_all_members(Pid, Entry, Dict)
-                    end, AllMembers, NewPidsWith),
-    NewPids = [ Pid || {_MRef, Pid} <- NewPidsWith ],
-    {AllMembers1, NewPids}.
-
-do_n(0, _Fun, Acc) ->
-    Acc;
-do_n(N, Fun, Acc) ->
-    do_n(N - 1, Fun, Fun(Acc)).
-
-pool_add_retries(#pool{add_member_retry = Retries}) ->
-    Retries.
 
 -spec store_all_members(pid(),
                         {reference(), free | pid(), {_, _, _}}, dict()) -> dict().
@@ -531,7 +568,7 @@ expired_free_members(Members, Now, MaxAge) ->
                   Label :: atom(),
                   Value :: metric_value(),
                   Type  :: metric_type()) -> ok.
-send_metric(#pool{metrics_mod = undefined}, _Label, _Value, _Type) ->
+send_metric(#pool{metrics_mod = pooler_no_metrics}, _Label, _Value, _Type) ->
     ok;
 send_metric(#pool{name = PoolName, metrics_mod = MetricsMod}, Label, Value, Type) ->
     MetricName = pool_metric(PoolName, Label),
@@ -542,6 +579,10 @@ send_metric(#pool{name = PoolName, metrics_mod = MetricsMod}, Label, Value, Type
 pool_metric(PoolName, Metric) ->
     iolist_to_binary([<<"pooler.">>, atom_to_binary(PoolName, utf8),
                       ".", atom_to_binary(Metric, utf8)]).
+
+-spec time_as_secs(time_spec()) -> non_neg_integer().
+time_as_secs({Time, Unit}) ->
+    time_as_micros({Time, Unit}) div 1000000.
 
 -spec time_as_millis(time_spec()) -> non_neg_integer().
 %% @doc Convert time unit into milliseconds.
@@ -558,3 +599,6 @@ time_as_micros({Time, ms}) ->
     1000 * Time;
 time_as_micros({Time, mu}) ->
     Time.
+
+secs_between({Mega1, Secs1, _}, {Mega2, Secs2, _}) ->
+    (Mega2 - Mega1) * 1000000 + (Secs2 - Secs1).
