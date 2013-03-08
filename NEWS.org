@@ -16,7 +16,7 @@ Pool names in config must be atoms, not strings.
 Each pool is now serviced by its own =gen_server= with an independent
 supervision tree. This makes pooler a good fit when you need to pool
 different unrelated clients, for example Redis and Riak. Independent
-pools will not content for the same server mailbox as was the case in
+pools will not contend for the same server mailbox as was the case in
 version 0.0.x and the supervision structure should isolate failures
 such that a high crash rate in one pool should not take down an
 unrelated pool.
