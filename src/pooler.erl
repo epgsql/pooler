@@ -82,11 +82,13 @@ take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
 %% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
 %% members are available in the randomly chosen pool, all other pools
 %% in the group are tried in order.
--spec take_group_member(atom()) -> pid() | error_no_members.
+-spec take_group_member(atom()) -> pid() | error_no_members | {error_no_group, atom()}.
 take_group_member(GroupName) ->
     case pg2:get_local_members(GroupName) of
-        {error, {no_such_group, GroupName}} = Error ->
-            Error;
+        {error, {no_such_group, GroupName}} ->
+            {error_no_group, GroupName};
+        [] ->
+            error_no_members;
         Pools ->
             %% Put a random member at the front of the list and then
             %% return the first member you can walking the list.

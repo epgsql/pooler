@@ -120,7 +120,6 @@ pooler_basics_test_() ->
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
              error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(crypto),
              application:start(pooler)
      end,
      fun(_X) ->
@@ -310,12 +309,12 @@ pooler_groups_test_() ->
                      ],
              application:set_env(pooler, pools, Pools),
              %% error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(crypto),
              pg2:start(),
              application:start(pooler)
      end,
      fun(_X) ->
-             application:stop(pooler)
+             application:stop(pooler),
+             application:stop(pg2)
      end,
      [
       {"take and return one group member (repeated)",
@@ -336,7 +335,7 @@ pooler_groups_test_() ->
 
       {"take member from unknown group",
        fun() ->
-               ?assertEqual({error, {no_such_group, not_a_group}},
+               ?assertEqual({error_no_group, not_a_group},
                             pooler:take_group_member(not_a_group))
        end},
 
@@ -350,6 +349,13 @@ pooler_groups_test_() ->
        fun() ->
                Pid = pooler:take_member(test_pool_3),
                ?assertEqual(ok, pooler:return_group_member(group_1, Pid))
+       end},
+
+      {"take member from empty group",
+       fun() ->
+               %% artificially empty group member list
+               [ pg2:leave(group_1, M) || M <- pg2:get_members(group_1) ],
+               ?assertEqual(error_no_members, pooler:take_group_member(group_1))
        end},
 
       {"return member to group, implied ok",
