@@ -14,7 +14,12 @@ start_link() ->
 
 init([]) ->
     %% a list of pool configs
-    {ok, Config} = application:get_env(pooler, pools),
+    Config = case application:get_env(pooler, pools) of
+                 {ok, C} ->
+                     C;
+                 undefined ->
+                     []
+             end,
     MetricsConfig = {metrics_mod, metrics_module()},
     Pools = [ pooler_config:list_to_pool([MetricsConfig | L]) || L <- Config ],
     PoolSupSpecs = [ pool_sup_spec(Pool) || Pool <- Pools ],

@@ -101,7 +101,7 @@ assert_tc_valid(Pid) ->
 %     user_crash(User),
 %     stop_tc(Pid1).
 
-pooler_basics_test_() ->
+pooler_basics_via_config_test_() ->
     {setup,
      fun() ->
              application:set_env(pooler, metrics_module, fake_metrics),
@@ -125,6 +125,36 @@ pooler_basics_test_() ->
      fun(_X) ->
              application:stop(pooler)
      end,
+     basic_tests()}}.
+
+pooler_basics_dynamic_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{name, test_pool_1},
+                     {max_count, 3},
+                     {init_count, 2},
+                     {start_mfa,
+                      {pooled_gs, start_link, [{"type-0"}]}}],
+             application:unset_env(pooler, pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(pooler),
+             pooler:new_pool(Pool)
+     end,
+     fun(_X) ->
+             application:stop(pooler)
+     end,
+     basic_tests()}}.
+
+basic_tests() ->
      [
       {"there are init_count members at start",
        fun() ->
@@ -290,7 +320,7 @@ pooler_basics_test_() ->
                Ref = erlang:make_ref(),
                ?assertEqual(ok, pooler:accept_member(test_pool_1, {Ref, Bad}))
        end}
-     ]}}.
+      ].
 
 pooler_groups_test_() ->
     {setup,
