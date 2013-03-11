@@ -1,5 +1,5 @@
 %% @author Seth Falcon <seth@userprimary.net>
-%% @copyright 2012 Seth Falcon
+%% @copyright 2012-2013 Seth Falcon
 %% @doc Helper gen_server to start pool members
 %%
 -module(pooler_starter).
