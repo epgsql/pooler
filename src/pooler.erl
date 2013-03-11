@@ -1,5 +1,5 @@
 %% @author Seth Falcon <seth@userprimary.net>
-%% @copyright 2011-2012 Seth Falcon
+%% @copyright 2011-2013 Seth Falcon
 %% @doc This is the main interface to the pooler application
 %%
 %% To integrate with your application, you probably want to call
@@ -36,7 +36,9 @@
          return_member/2,
          return_member/3,
          pool_stats/1,
-         manual_start/0]).
+         manual_start/0,
+         new_pool/1,
+         rm_pool/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -64,6 +66,54 @@ start_link(#pool{name = Name} = Pool) ->
 manual_start() ->
     application:start(sasl),
     application:start(pooler).
+
+%% @doc Start a new pool described by the proplist `PoolConfig'. The
+%% following keys are required in the proplist:
+%%
+%% <dl>
+%% <dt>`name'</dt>
+%% <dd>An atom giving the name of the pool.</dd>
+%% <dt>`init_count'</dt>
+%% <dd>Number of members to add to the pool at start. When the pool is
+%% started, `init_count' members will be started in parallel.</dd>
+%% <dt>`max_count'</dt>
+%% <dd>Maximum number of members in the pool.</dd>
+%% <dt>`start_mfa'</dt>
+%% <dd>A tuple of the form `{Mod, Fun, Args}' describing how to start
+%% new pool members.</dd>
+%% </dl>
+%%
+%% In addition, you can specify any of the following optional
+%% configuration options:
+%%
+%% <dl>
+%% <dt>`group'</dt>
+%% <dd>An atom giving the name of the group this pool belongs
+%% to. Pools sharing a common `group' value can be accessed using
+%% {@link take_group_member/1} and {@link return_group_member/2}.</dd>
+%% <dt>`cull_interval'</dt>
+%% <dd>Time between checks for stale pool members. Specified as
+%% `{Time, Unit}' where `Time' is a non-negative integer and `Unit'
+%% is one of `min', `sec', `ms', or `mu'. The default value of `{0,
+%% min}' disables stale member checking. When `Time' is greater than
+%% zero, a message will be sent to the pool at the configured interval
+%% to trigger the removal of members that have not been accessed in
+%% `max_age' time units.</dd>
+%% <dt>`max_age'</dt>
+%% <dd>Members idle longer than `max_age' time units are removed from
+%% the pool when stale checking is enabled via
+%% `cull_interval'. Culling of idle members will never reduce the pool
+%% below `init_count'. The value is specified as `{Time, Unit}'. Note
+%% that timers are not set on individual pool members and may remain
+%% in the pool beyond the configured `max_age' value since members are
+%% only removed on the interval configured via `cull_interval'.</dd>
+%% </dl>
+new_pool(PoolConfig) ->
+    pooler_sup:new_pool(PoolConfig).
+
+%% @doc Terminate the named pool.
+rm_pool(PoolName) ->
+    pooler_sup:rm_pool(PoolName).
 
 %% @doc For INTERNAL use. Adds `MemberPid' to the pool.
 -spec accept_member(atom() | pid(), pid() | {noproc, _}) -> ok.

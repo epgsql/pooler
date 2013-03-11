@@ -240,6 +240,23 @@ pooler_basics_test_() ->
        end
       },
 
+      {"dynamic pool creation",
+       fun() ->
+               {ok, SupPid} = pooler:new_pool([{name, dyn_pool_1},
+                                               {max_count, 3},
+                                               {init_count, 2},
+                                               {start_mfa,
+                                                {pooled_gs, start_link, [{"dyn-0"}]}}]),
+               ?assert(is_pid(SupPid)),
+               M = pooler:take_member(dyn_pool_1),
+               ?assertMatch({"dyn-0", _Id}, pooled_gs:get_id(M)),
+               ?assertEqual(ok, pooler:rm_pool(dyn_pool_1)),
+               ?assertExit({noproc, _}, pooler:take_member(dyn_pool_1)),
+               %% remove non-existing pool
+               ?assertEqual(ok, pooler:rm_pool(dyn_pool_X)),
+               ?assertEqual(ok, pooler:rm_pool(dyn_pool_1))
+       end},
+
       {"metrics have been called",
        fun() ->
                %% exercise the API to ensure we have certain keys reported as metrics

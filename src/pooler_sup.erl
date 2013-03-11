@@ -2,7 +2,10 @@
 
 -behaviour(supervisor).
 
--export([start_link/0, init/1]).
+-export([init/1,
+         new_pool/1,
+         rm_pool/1,
+         start_link/0]).
 
 -include("pooler.hrl").
 
@@ -17,6 +20,26 @@ init([]) ->
     PoolSupSpecs = [ pool_sup_spec(Pool) || Pool <- Pools ],
     ets:new(?POOLER_GROUP_TABLE, [set, public, named_table, {write_concurrency, true}]),
     {ok, {{one_for_one, 5, 60}, [starter_sup_spec() | PoolSupSpecs]}}.
+
+%% @doc Create a new pool from proplist pool config `PoolConfig'. The
+%% public API for this functionality is {@link pooler:new_pool/1}.
+new_pool(PoolConfig) ->
+    MetricsConfig = {metrics_mod, metrics_module()},
+    NewPool = pooler_config:list_to_pool([MetricsConfig | PoolConfig]),
+    Spec = pool_sup_spec(NewPool),
+    supervisor:start_child(?MODULE, Spec).
+
+%% @doc Shutdown the named pool.
+rm_pool(Name) ->
+    SupName = pool_sup_name(Name),
+    case supervisor:terminate_child(?MODULE, SupName) of
+        {error, not_found} ->
+            ok;
+        ok ->
+            supervisor:terminate_child(?MODULE, SupName);
+        Error ->
+            Error
+    end.
 
 starter_sup_spec() ->
     {pooler_starter_sup, {pooler_starter_sup, start_link, []},
