@@ -77,7 +77,7 @@ better support multiple independent pools.
 
 ** Usage and API
 
-*** Pool Configuration
+*** Pool Configuration via application environment
 
 Pool configuration is specified in the pooler application's
 environment.  This can be provided in a config file using =-config= or
@@ -167,6 +167,19 @@ time to add a new member and will return =error_no_members= if this
 fails. You can increase the number of retries by specifying a value
 for the =add_member_retry= configuration parameter.
 
+*** Pool Configuration via =pooler:new_pool=
+You can create pools using =pooler:new_pool/1= when accepts a
+proplist of pool configuration. Here's an example:
+#+BEGIN_SRC erlang
+PoolConfig = [{name, rc8081},
+              {group, riak},
+              {max_count, 5},
+              {init_count, 2},
+              {start_mfa,
+               {riakc_pb_socket,
+                start_link, ["localhost", 8081]}}],
+pooler:new_pool(PoolConfig).
+#+END_SRC
 *** Using pooler
 
 Here's an example session:
