@@ -158,15 +158,6 @@ stale member checking entirely. The =max_age= parameter has the same
 default value which will cause any members beyond =init_count= to be
 removed if scheduled culling is enabled.
 
-**** Retry behvaior when members do not start
-
-If there are no free members, but the pool size is less than
-=max_count=, pooler will attempt to add a new member to the pool to
-satisfy a =take_member= request. By default, pooler tries a single
-time to add a new member and will return =error_no_members= if this
-fails. You can increase the number of retries by specifying a value
-for the =add_member_retry= configuration parameter.
-
 *** Pool Configuration via =pooler:new_pool=
 You can create pools using =pooler:new_pool/1= when accepts a
 proplist of pool configuration. Here's an example:
@@ -305,12 +296,15 @@ pooler's app config with NAME matching the name attribute of the
 config.
 
 The pooler_NAME_pool_sup starts the gen_server that will register with
-pooler_NAME_pool as well as a pooler_pooled_worker_sup that will be
-used to start and supervise the members of this pool.
+pooler_NAME_pool as well as a pooler_NAME_member_sup that will be used
+to start and supervise the members of this pool. The
+pooler_starter_sup is used to start temporary workers used for
+managing async member start.
 
 pooler_sup:                one_for_one
 pooler_NAME_pool_sup:      all_for_one
-pooler_pooled_worker_sup:  simple_one_for_one
+pooler_NAME_member_sup:    simple_one_for_one
+pooler_starter_sup:        simple_one_for_one
 
 Groups of pools are managed using the pg2 application. This imposes a
 requirement to set a configuration parameter on the kernel application
