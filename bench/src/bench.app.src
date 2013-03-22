@@ -1,0 +1,15 @@
+%% -*- mode: erlang -*-
+{application, bench,
+ [
+  {description, "pooler basho_bench test rig"},
+  {vsn, "0.0.1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  %% uncomment if this is an active application
+  %% {mod, { bench_app, []}},
+  {env, []}
+ ]}.
+%% vim: set filetype=erlang tabstop=2

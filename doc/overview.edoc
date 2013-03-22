@@ -1,5 +1,5 @@
 @author Seth Falcon <seth@userprimary.net>
-@copyright 2011 Seth Falcon
+@copyright 2011-2013 Seth Falcon
 @title pooler - An OTP Process Pool Application
 @doc 
 The pooler application allows you to manage pools of OTP behaviors
@@ -8,64 +8,3 @@ with exclusive access to pool members using pooler:take_member.
 
 See the README.org file for a good introduction to what pooler is all
 about.
-
-== Pooler Configuration ==
-
-Pool configuration is specified in the pooler application's
-environment.  This can be provided in a config file using `-config' or
-set at startup using `application:set_env(pooler, pools, Pools)'.
-Here's an example config file that creates three pools of
-Riak pb clients each talking to a different node in a local cluster:
-
-```
-% pooler.config
-% Start Erlang as: erl -config pooler
-% -*- mode: erlang -*-
-% pooler app config
-[
- {pooler, [
-         {pools, [
-                  [{name, "rc8081"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8081]}}],
-
-                  [{name, "rc8082"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8082]}}],
-
-                  [{name, "rc8083"},
-                   {max_count, 5},
-                   {init_count, 2},
-                   {start_mfa,
-                    {riakc_pb_socket, start_link, ["localhost", 8083]}}]
-                 ]}
-        ]}
-].
-'''
-
-== Using pooler ==
-
-Here's an example session:
-
-```
-application:start(pooler).
-P = pooler:take_member(),
-% use P
-pooler:return_member(P, ok).
-'''
-
-Once started, the main interaction you will have with pooler is through
-two functions, `take_member/0' and `return_member/2'.
-
-Call `pooler:take_member()' to obtain a member from a randomly
-selected pool.  When you are done with it, return it to the pool using
-`pooler:return_member(Pid, ok)'.  If you encountered an error using
-the member, you can pass `fail' as the second argument.  In this case,
-pooler will permanently remove that member from the pool and start a
-new member to replace it.  If your process is short lived, you can
-omit the call to `return_member'.  In this case, pooler will detect
-the normal exit of the consumer and reclaim the member.

@@ -1,0 +1,48 @@
+* 1.0.0
+** Breaking Changes (upgrading from 0.0.x)
+*** pooler application config format changes
+Pool names in config must be atoms, not strings.
+*** API changes
+1. The function =pooler:take_member/0= has been removed.
+2. Pool names are now atoms not strings. An atom matching a
+   configured pool name is expected by =pooler:take_member/1=.
+3. For load balancing a collection of related pools, you must use the
+   new group API functions: =pooler:take_group_member/1= and
+   =pooler:return_group_member/2=. A group attribute can be specified
+   as optional config for each pool. Pools with the same group name
+   form a group.
+** What's New
+*** Improved support for multiple independent pools
+Each pool is now serviced by its own =gen_server= with an independent
+supervision tree. This makes pooler a good fit when you need to pool
+different unrelated clients, for example Redis and Riak. Independent
+pools will not contend for the same server mailbox as was the case in
+version 0.0.x and the supervision structure should isolate failures
+such that a high crash rate in one pool should not take down an
+unrelated pool.
+*** Asynchronous and parallelized member creation
+Members are started and added to pools asynchronously. This is a major
+improvement when pooling members with substantial startup
+time. Instead of the entire pool being blocked while a new member is
+started, the pool can continue to process messages.
+
+When a pool is initialized, all =init_count= members are started in
+parallel. The pool does not start processing messages until all
+initial members have been added. This reduces the overall
+time-to-start for pooler compared to version 0.0.x where
+initialization of members was handled serially.
+
+Once running, new members are added in batches of size =init_count=
+up to =max_count=. Batches are added after the pool returns a
+single =error_no_members= value for a pool. This means a pool will
+always return at least one =error_no_members= value when growing
+beyond =init_count= size. This approach has the benefit of not
+penalizing a steady load of =init_count= members in use. If members
+addition were to be triggered before =init_count= were in use, then
+members would be added to the pool, never used, and culled after the
+configured timeout.
+*** The pooler server uses monitors not links
+In pooler 0.0.x, =pooler= was a system process that trapped exits and
+linked to members and consumers. Monitors are now used instead to
+reduce the potential impact of a pooler related crash and to simplify
+the code.

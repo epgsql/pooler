@@ -13,7 +13,7 @@ setup(InitCount, MaxCount, NumPools) ->
                        N = integer_to_list(I),
                        Name = "p" ++ N,
                        Arg0 = "pool-" ++ Name,
-                       [{name, Name},
+                       [{name, list_to_atom(Name)},
                         {max_count, MaxCount},
                         {init_count, InitCount},
                         {start_mfa,
@@ -27,11 +27,11 @@ consumer_cycle(N) ->
     consumer_cycle(N, 0, 0).
 
 consumer_cycle(N, NumOk, NumFail) when N > 0 ->
-    P = pooler:take_member(),
+    P = pooler:take_member(p1),
     case P of
         Pid when is_pid(Pid) ->
             true = is_process_alive(P),
-            pooler:return_member(P, ok),
+            pooler:return_member(p1, P, ok),
             consumer_cycle(N - 1, NumOk + 1, NumFail);
         _ ->
             consumer_cycle(N - 1, NumOk, NumFail + 1)
@@ -84,7 +84,7 @@ pooler_take_return_test_() ->
     {foreach,
      % setup
      fun() ->
-             InitCount = 10,
+             InitCount = 100,
              MaxCount = 100,
              NumPools = 5,
              error_logger:delete_report_handler(error_logger_tty_h),
@@ -114,6 +114,9 @@ pooler_take_return_test_() ->
                    lists:foldr(fun({_, L}, {O, F}) ->
                                        {O + ?gv(ok, L), F + ?gv(fail, L)}
                                end, {0, 0}, Res),
+               %% not sure what to test here now. We expect some
+               %% failures if init count is less than max count
+               %% because of async start.
                ?assertEqual(0, NumFail),
                ?assertEqual(100*100, NumOk)
        end}

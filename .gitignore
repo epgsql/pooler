@@ -5,3 +5,6 @@ doc/*.html
 /doc/stylesheet.css
 /doc/erlang.png
 /doc/edoc-info
+/bench/tests
+/bench/deps
+
