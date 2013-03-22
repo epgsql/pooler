@@ -288,6 +288,8 @@ When enabled, the following metrics will be tracked:
 ** Implementation Notes
 *** Overview of supervision
 
+[[./doc/pooler-sup-tree.png]]
+
 The top-level supervisor is pooler_sup. It supervises one supervisor
 for each pool configured in pooler's app config.
 
