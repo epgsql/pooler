@@ -574,6 +574,11 @@ add_member_to_consumer(MemberPid, CPid, CPMap) ->
 cull_members_from_pool(#pool{cull_interval = {0, _}} = Pool) ->
     %% 0 cull_interval means do not cull
     Pool;
+cull_members_from_pool(#pool{init_count = C, max_count = C} = Pool) ->
+    %% if init_count matches max_count, then we will not dynamically
+    %% add capacity and should not schedule culling regardless of
+    %% cull_interval config.
+    Pool;
 cull_members_from_pool(#pool{name = PoolName,
                              free_count = FreeCount,
                              init_count = InitCount,

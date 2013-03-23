@@ -516,6 +516,22 @@ pooler_scheduled_cull_test_() ->
                timer:sleep(250),
                ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
                [ pooler:return_member(test_pool_1, P) || P <- Pids ]
+       end},
+
+      {"no cull when init_count matches max_count",
+       %% not sure how to verify this. But this test at least
+       %% exercises the code path.
+       fun() ->
+               Config = [{name, test_static_pool_1},
+                         {max_count, 2},
+                         {init_count, 2},
+                         {start_mfa, {pooled_gs, start_link, [{"static-0"}]}},
+                         {cull_interval, {200, ms}}], % ignored
+               pooler:new_pool(Config),
+               P = pooler:take_member(test_static_pool_1),
+               ?assertMatch({"static-0", _}, pooled_gs:get_id(P)),
+               pooler:return_member(test_static_pool_1, P),
+               ok
        end}
      ]}.
 
