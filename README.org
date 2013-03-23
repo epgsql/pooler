@@ -153,10 +153,9 @@ During a check, pool members that have not been used in more than
 =max_age= minutes will be removed until the pool size reaches
 =init_count=.
 
-The default value for =cull_interval= is ={0, min}= which disables
-stale member checking entirely. The =max_age= parameter has the same
-default value which will cause any members beyond =init_count= to be
-removed if scheduled culling is enabled.
+The default value for =cull_interval= is ={1, min}=. You can disable
+culling by specifying a value os ={0, min}=. The =max_age= parameter
+defaults to ={30, sec}=.
 
 *** Pool Configuration via =pooler:new_pool=
 You can create pools using =pooler:new_pool/1= when accepts a

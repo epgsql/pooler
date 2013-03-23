@@ -116,6 +116,7 @@ pooler_basics_via_config_test_() ->
              Pools = [[{name, test_pool_1},
                        {max_count, 3},
                        {init_count, 2},
+                       {cull_interval, {0, min}},
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
@@ -465,7 +466,8 @@ pooler_scheduled_cull_test_() ->
                        {max_count, 10},
                        {init_count, 2},
                        {start_mfa, {pooled_gs, start_link, [{"type-0"}]}},
-                       {cull_interval, {200, ms}}]],
+                       {cull_interval, {200, ms}},
+                       {max_age, {0, min}}]],
              application:set_env(pooler, pools, Pools),
              %% error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler)

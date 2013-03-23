@@ -93,12 +93,12 @@ manual_start() ->
 %% {@link take_group_member/1} and {@link return_group_member/2}.</dd>
 %% <dt>`cull_interval'</dt>
 %% <dd>Time between checks for stale pool members. Specified as
-%% `{Time, Unit}' where `Time' is a non-negative integer and `Unit'
-%% is one of `min', `sec', `ms', or `mu'. The default value of `{0,
-%% min}' disables stale member checking. When `Time' is greater than
-%% zero, a message will be sent to the pool at the configured interval
-%% to trigger the removal of members that have not been accessed in
-%% `max_age' time units.</dd>
+%% `{Time, Unit}' where `Time' is a non-negative integer and `Unit' is
+%% one of `min', `sec', `ms', or `mu'. The default value of `{1, min}'
+%% triggers a once per minute check to remove members that have not
+%% been accessed in `max_age' time units. Culling can be disabled by
+%% specifying a zero time vaule (e.g. `{0, min}'. Culling will also be
+%% disabled if `init_count' is the same as `max_count'.</dd>
 %% <dt>`max_age'</dt>
 %% <dd>Members idle longer than `max_age' time units are removed from
 %% the pool when stale checking is enabled via
@@ -106,7 +106,8 @@ manual_start() ->
 %% below `init_count'. The value is specified as `{Time, Unit}'. Note
 %% that timers are not set on individual pool members and may remain
 %% in the pool beyond the configured `max_age' value since members are
-%% only removed on the interval configured via `cull_interval'.</dd>
+%% only removed on the interval configured via `cull_interval'. The
+%% default value is `{30, sec}'.</dd>
 %% <dt>`member_start_timeout'</dt>
 %% <dd>Time limit for member starts. Specified as `{Time,
 %% Unit}'. Defaults to `{1, min}'.</dd>

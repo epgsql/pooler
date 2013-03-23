@@ -1,6 +1,6 @@
 -define(DEFAULT_ADD_RETRY, 1).
--define(DEFAULT_CULL_INTERVAL, {0, min}).
--define(DEFAULT_MAX_AGE, {0, min}).
+-define(DEFAULT_CULL_INTERVAL, {1, min}).
+-define(DEFAULT_MAX_AGE, {30, sec}).
 -define(DEFAULT_MEMBER_START_TIMEOUT, {1, min}).
 -define(POOLER_GROUP_TABLE, pooler_group_table).
 
