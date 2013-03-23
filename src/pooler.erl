@@ -496,7 +496,7 @@ cpmap_remove(Pid, CPid, CPMap) ->
                     dict:store(CPid, {MRef, Pids1}, CPMap);
                 [] ->
                     %% no more members for this consumer
-                    erlang:demonitor(MRef),
+                    erlang:demonitor(MRef, [flush]),
                     dict:erase(CPid, CPMap)
             end;
         error ->
@@ -517,7 +517,7 @@ remove_pid(Pid, Pool) ->
     case dict:find(Pid, AllMembers) of
         {ok, {MRef, free, _Time}} ->
             % remove an unused member
-            erlang:demonitor(MRef),
+            erlang:demonitor(MRef, [flush]),
             FreePids = lists:delete(Pid, Pool#pool.free_pids),
             NumFree = Pool#pool.free_count - 1,
             Pool1 = Pool#pool{free_pids = FreePids, free_count = NumFree},
@@ -527,7 +527,7 @@ remove_pid(Pid, Pool) ->
         {ok, {MRef, CPid, _Time}} ->
             %% remove a member being consumed. No notice is sent to
             %% the consumer.
-            erlang:demonitor(MRef),
+            erlang:demonitor(MRef, [flush]),
             Pool1 = Pool#pool{in_use_count = Pool#pool.in_use_count - 1},
             exit(Pid, kill),
             send_metric(Pool1, killed_in_use_count, {inc, 1}, counter),
