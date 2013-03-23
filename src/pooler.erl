@@ -107,6 +107,9 @@ manual_start() ->
 %% that timers are not set on individual pool members and may remain
 %% in the pool beyond the configured `max_age' value since members are
 %% only removed on the interval configured via `cull_interval'.</dd>
+%% <dt>`member_start_timeout'</dt>
+%% <dd>Time limit for member starts. Specified as `{Time,
+%% Unit}'. Defaults to `{1, min}'.</dd>
 %% </dl>
 new_pool(PoolConfig) ->
     pooler_sup:new_pool(PoolConfig).
@@ -318,11 +321,12 @@ do_accept_member({Ref, Pid},
                     all_members = AllMembers,
                     free_pids = Free,
                     free_count = NumFree,
-                    starting_members = StartingMembers0
+                    starting_members = StartingMembers0,
+                    member_start_timeout = StartTimeout
                    } = Pool) when is_pid(Pid) ->
     %% make sure we don't accept a timedout member
     StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
-                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
+                                                    StartTimeout),
     case lists:keymember(Ref, 1, StartingMembers) of
         false ->
             %% a pid we didn't ask to start, ignore it.
@@ -338,10 +342,11 @@ do_accept_member({Ref, Pid},
                       all_members = AllMembers1,
                       starting_members = StartingMembers1}
     end;
-do_accept_member({Ref, _Reason}, #pool{starting_members = StartingMembers0} = Pool) ->
+do_accept_member({Ref, _Reason}, #pool{starting_members = StartingMembers0,
+                                       member_start_timeout = StartTimeout} = Pool) ->
     %% member start failed, remove in-flight ref and carry on.
     StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
-                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
+                                                    StartTimeout),
     StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
     Pool#pool{starting_members = StartingMembers1}.
 
@@ -382,8 +387,8 @@ init_members_sync(N, #pool{name = PoolName} = Pool) ->
 
 collect_init_members(#pool{starting_members = []} = Pool) ->
     Pool;
-collect_init_members(#pool{} = Pool) ->
-    Timeout = time_as_millis(?DEFAULT_MEMBER_START_TIMEOUT),
+collect_init_members(#pool{member_start_timeout = StartTimeout} = Pool) ->
+    Timeout = time_as_millis(StartTimeout),
     receive
         {accept_member, {Ref, Member}} ->
             collect_init_members(do_accept_member({Ref, Member}, Pool))
@@ -400,11 +405,12 @@ take_member_from_pool(#pool{init_count = InitCount,
                             in_use_count = NumInUse,
                             free_count = NumFree,
                             consumer_to_pid = CPMap,
-                            starting_members = StartingMembers0} = Pool,
+                            starting_members = StartingMembers0,
+                            member_start_timeout = StartTimeout} = Pool,
                       From) ->
     send_metric(Pool, take_rate, 1, meter),
     StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
-                                                    ?DEFAULT_MEMBER_START_TIMEOUT),
+                                                    StartTimeout),
     NumCanAdd = Max - (NumInUse + NumFree + length(StartingMembers)),
     case Free of
         [] when NumCanAdd =< 0  ->

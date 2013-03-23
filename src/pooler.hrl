@@ -60,6 +60,9 @@
           %% and is used to implement start timeout.
           starting_members = [] :: [{reference(), erlang:timestamp()}],
 
+          %% The maximum amount of time to allow for member start.
+          member_start_timeout = ?DEFAULT_MEMBER_START_TIMEOUT :: time_spec(),
+
           %% The module to use for collecting metrics. If set to
           %% 'pooler_no_metrics', then metric sending calls do
           %% nothing. A typical value to actually capture metrics is

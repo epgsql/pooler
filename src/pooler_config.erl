@@ -1,5 +1,5 @@
 %% @author Seth Falcon <seth@userprimary.net>
-%% @copyright 2012 Seth Falcon
+%% @copyright 2012-2013 Seth Falcon
 %% @doc Helper module to transform app config proplists into pool records
 
 -module(pooler_config).
@@ -19,6 +19,7 @@ list_to_pool(P) ->
        add_member_retry  = ?gv(add_member_retry, P, ?DEFAULT_ADD_RETRY),
        cull_interval     = ?gv(cull_interval, P, ?DEFAULT_CULL_INTERVAL),
        max_age           = ?gv(max_age, P, ?DEFAULT_MAX_AGE),
+       member_start_timeout = ?gv(member_start_timeout, P, ?DEFAULT_MEMBER_START_TIMEOUT),
        metrics_mod       = ?gv(metrics_mod, P, pooler_no_metrics)}.
 
 %% Return `Value' for `Key' in proplist `P' or crashes with an
