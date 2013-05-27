@@ -273,16 +273,20 @@ basic_tests() ->
 
       {"dynamic pool creation",
        fun() ->
-               {ok, SupPid} = pooler:new_pool([{name, dyn_pool_1},
-                                               {max_count, 3},
-                                               {init_count, 2},
-                                               {start_mfa,
-                                                {pooled_gs, start_link, [{"dyn-0"}]}}]),
-               ?assert(is_pid(SupPid)),
+               PoolSpec = [{name, dyn_pool_1},
+                           {max_count, 3},
+                           {init_count, 2},
+                           {start_mfa,
+                            {pooled_gs, start_link, [{"dyn-0"}]}}],
+               {ok, SupPid1} = pooler:new_pool(PoolSpec),
+               ?assert(is_pid(SupPid1)),
                M = pooler:take_member(dyn_pool_1),
                ?assertMatch({"dyn-0", _Id}, pooled_gs:get_id(M)),
                ?assertEqual(ok, pooler:rm_pool(dyn_pool_1)),
                ?assertExit({noproc, _}, pooler:take_member(dyn_pool_1)),
+               %% verify pool of same name can be created after removal
+               {ok, SupPid2} = pooler:new_pool(PoolSpec),
+               ?assert(is_pid(SupPid2)),
                %% remove non-existing pool
                ?assertEqual(ok, pooler:rm_pool(dyn_pool_X)),
                ?assertEqual(ok, pooler:rm_pool(dyn_pool_1))
