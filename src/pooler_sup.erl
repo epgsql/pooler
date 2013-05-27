@@ -41,7 +41,7 @@ rm_pool(Name) ->
         {error, not_found} ->
             ok;
         ok ->
-            supervisor:terminate_child(?MODULE, SupName);
+            supervisor:delete_child(?MODULE, SupName);
         Error ->
             Error
     end.
