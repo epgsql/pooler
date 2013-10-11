@@ -5,6 +5,7 @@
 -export([init/1,
          new_pool/1,
          rm_pool/1,
+         pool_child_spec/1,
          start_link/0]).
 
 -include("pooler.hrl").
@@ -29,10 +30,15 @@ init([]) ->
 %% @doc Create a new pool from proplist pool config `PoolConfig'. The
 %% public API for this functionality is {@link pooler:new_pool/1}.
 new_pool(PoolConfig) ->
+    Spec = pool_child_spec(PoolConfig),
+    supervisor:start_child(?MODULE, Spec).
+
+%% @doc Create a child spec for new pool from proplist pool config `PoolConfig'. The
+%% public API for this functionality is {@link pooler:pool_child_spec/1}.
+pool_child_spec(PoolConfig) ->
     MetricsConfig = {metrics_mod, metrics_module()},
     NewPool = pooler_config:list_to_pool([MetricsConfig | PoolConfig]),
-    Spec = pool_sup_spec(NewPool),
-    supervisor:start_child(?MODULE, Spec).
+    pool_sup_spec(NewPool).
 
 %% @doc Shutdown the named pool.
 rm_pool(Name) ->

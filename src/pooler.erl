@@ -38,6 +38,7 @@
          pool_stats/1,
          manual_start/0,
          new_pool/1,
+         pool_child_spec/1,
          rm_pool/1]).
 
 %% ------------------------------------------------------------------
@@ -118,6 +119,13 @@ new_pool(PoolConfig) ->
 %% @doc Terminate the named pool.
 rm_pool(PoolName) ->
     pooler_sup:rm_pool(PoolName).
+
+%% @doc Get child spec described by the proplist `PoolConfig'.
+%%
+%% See {@link pooler:new_pool/1} for info about `PoolConfig'.
+-spec pool_child_spec([{atom(), term()}]) -> supervisor:child_spec().
+pool_child_spec(PoolConfig) ->
+    pooler_sup:pool_child_spec(PoolConfig).
 
 %% @doc For INTERNAL use. Adds `MemberPid' to the pool.
 -spec accept_member(atom() | pid(), pid() | {noproc, _}) -> ok.
