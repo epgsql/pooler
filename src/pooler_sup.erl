@@ -42,7 +42,7 @@ pool_child_spec(PoolConfig) ->
 
 %% @doc Shutdown the named pool.
 rm_pool(Name) ->
-    SupName = pool_sup_name(Name),
+    SupName = pool_sup_name_for_ref(Name),
     case supervisor:terminate_child(?MODULE, SupName) of
         {error, not_found} ->
             ok;
@@ -57,11 +57,11 @@ starter_sup_spec() ->
      transient, 5000, supervisor, [pooler_starter_sup]}.
 
 pool_sup_spec(#pool{name = Name} = Pool) ->
-    SupName = pool_sup_name(Name),
+    SupName = pool_sup_name_for_ref(Name),
     {SupName, {pooler_pool_sup, start_link, [Pool]},
      transient, 5000, supervisor, [pooler_pool_sup]}.
 
-pool_sup_name(Name) ->
+pool_sup_name_for_ref(Name) ->
     list_to_atom("pooler_" ++ atom_to_list(Name) ++ "_pool_sup").
 
 metrics_module() ->

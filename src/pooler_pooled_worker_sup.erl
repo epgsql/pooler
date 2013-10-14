@@ -7,7 +7,7 @@
 -include("pooler.hrl").
 
 start_link(#pool{start_mfa = {_, _, _} = MFA} = Pool) ->
-    SupName = pooler_pool_sup:member_sup_name(Pool),
+    SupName = pooler_pool_sup:member_sup_name_for_proc(Pool),
     supervisor:start_link({local, SupName}, ?MODULE, MFA).
 
 init({Mod, Fun, Args}) ->

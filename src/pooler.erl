@@ -245,7 +245,7 @@ pool_stats(PoolName) ->
 -spec init(#pool{}) -> {'ok', #pool{}, 0}.
 init(#pool{}=Pool) ->
     #pool{init_count = N} = Pool,
-    MemberSup = pooler_pool_sup:member_sup_name(Pool),
+    MemberSup = pooler_pool_sup:member_sup_name_for_proc(Pool),
     Pool1 = set_member_sup(Pool, MemberSup),
     %% This schedules the next cull when the pool is configured for
     %% such and is otherwise a no-op.
