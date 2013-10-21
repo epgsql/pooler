@@ -67,7 +67,9 @@
           %% 'pooler_no_metrics', then metric sending calls do
           %% nothing. A typical value to actually capture metrics is
           %% folsom_metrics.
-          metrics_mod = pooler_no_metrics :: atom()
+          metrics_mod = pooler_no_metrics :: atom(),
+
+          waiting_consumer = queue:new() :: queue()
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
