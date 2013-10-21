@@ -41,7 +41,8 @@
          manual_start/0,
          new_pool/1,
          pool_child_spec/1,
-         rm_pool/1]).
+         rm_pool/1,
+         get_waiting_queue/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -121,6 +122,10 @@ new_pool(PoolConfig) ->
 %% @doc Terminate the named pool.
 rm_pool(PoolName) ->
     pooler_sup:rm_pool(PoolName).
+
+%% @doc get waiting queue of the named pool.
+get_waiting_queue(PoolName) ->
+    gen_server:call(PoolName, get_waiting_queue).  
 
 %% @doc Get child spec described by the proplist `PoolConfig'.
 %%
@@ -284,6 +289,9 @@ handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
 handle_call({accept_member, Pid}, _From, Pool) ->
     {reply, ok, do_accept_member(Pid, Pool)};
+handle_call(get_waiting_queue, _, 
+        #pool{waiting_consumer = Waiting} = Pool) ->
+    {reply, queue:to_list(Waiting), Pool};
 handle_call(stop, _From, Pool) ->
     {stop, normal, stop_ok, Pool};
 handle_call(pool_stats, _From, Pool) ->
@@ -432,7 +440,8 @@ take_member_from_pool(#pool{init_count = InitCount,
                             free_count = NumFree,
                             consumer_to_pid = CPMap,
                             starting_members = StartingMembers0,
-                            member_start_timeout = StartTimeout} = Pool,
+                            member_start_timeout = StartTimeout,
+                            waiting_consumer = Waiting} = Pool,
                       From) ->
     send_metric(Pool, take_rate, 1, meter),
     StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
@@ -442,9 +451,14 @@ take_member_from_pool(#pool{init_count = InitCount,
         [] when NumCanAdd =< 0  ->
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
-            NewPool = 
-                Pool#pool{waiting_consumer = queue:in(From, Pool#pool.waiting_consumer)},
-            {error_no_members, NewPool};
+            case queue:member(From, Waiting) of
+                true ->
+                    {error_no_members, Pool};
+                _    ->
+                    NewPool = 
+                        Pool#pool{waiting_consumer = queue:in(From, Waiting)},
+                    {error_no_members, NewPool}
+            end;
         [] when NumCanAdd > 0 ->
             %% Limit concurrently starting members to init_count. Add
             %% up to init_count members. Starting members here means
@@ -457,9 +471,7 @@ take_member_from_pool(#pool{init_count = InitCount,
             Pool1 = add_members_async(NumToAdd, Pool),
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
-            NewPool = 
-                Pool1#pool{waiting_consumer = queue:in(From, Pool1#pool.waiting_consumer)},
-            {error_no_members, NewPool};
+            {error_no_members, Pool1};
         [Pid|Rest] ->
             Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
                               free_count = NumFree - 1},
