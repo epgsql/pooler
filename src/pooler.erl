@@ -23,6 +23,8 @@
                         'error_no_members'.
 -type metric_type() :: 'counter' | 'histogram' | 'history' | 'meter'.
 
+-define(WAITING_TIME, 30000).
+
 %% ------------------------------------------------------------------
 %% API Function Exports
 %% ------------------------------------------------------------------
@@ -39,7 +41,8 @@
          manual_start/0,
          new_pool/1,
          pool_child_spec/1,
-         rm_pool/1]).
+         rm_pool/1,
+         get_waiting_queue/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -120,6 +123,10 @@ new_pool(PoolConfig) ->
 rm_pool(PoolName) ->
     pooler_sup:rm_pool(PoolName).
 
+%% @doc get waiting queue of the named pool.
+get_waiting_queue(PoolName) ->
+    gen_server:call(PoolName, get_waiting_queue).  
+
 %% @doc Get child spec described by the proplist `PoolConfig'.
 %%
 %% See {@link pooler:new_pool/1} for info about `PoolConfig'.
@@ -138,7 +145,22 @@ accept_member(PoolName, MemberPid) ->
 %%
 -spec take_member(atom() | pid()) -> pid() | error_no_members.
 take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
-    gen_server:call(PoolName, take_member, infinity).
+    case gen_server:call(PoolName, take_member, infinity) of
+        error_no_members ->
+            case gen_server:call(PoolName, take_member, infinity) of
+                error_no_members ->
+                    receive 
+                        {waiting_result, Member} ->
+                            Member
+                    after lock_timeout() ->
+                        erlang:exit(connection_lock_timeout)
+                    end;
+                Member ->
+                    Member
+            end;            
+        Member ->
+            Member
+    end.
 
 %% @doc Take a member from a randomly selected member of the group
 %% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
@@ -245,7 +267,7 @@ pool_stats(PoolName) ->
 -spec init(#pool{}) -> {'ok', #pool{}, 0}.
 init(#pool{}=Pool) ->
     #pool{init_count = N} = Pool,
-    MemberSup = pooler_pool_sup:member_sup_name(Pool),
+    MemberSup = pooler_pool_sup:member_sup_name_for_proc(Pool),
     Pool1 = set_member_sup(Pool, MemberSup),
     %% This schedules the next cull when the pool is configured for
     %% such and is otherwise a no-op.
@@ -267,6 +289,9 @@ handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
 handle_call({accept_member, Pid}, _From, Pool) ->
     {reply, ok, do_accept_member(Pid, Pool)};
+handle_call(get_waiting_queue, _, 
+        #pool{waiting_consumer = Waiting} = Pool) ->
+    {reply, queue:to_list(Waiting), Pool};
 handle_call(stop, _From, Pool) ->
     {stop, normal, stop_ok, Pool};
 handle_call(pool_stats, _From, Pool) ->
@@ -415,7 +440,8 @@ take_member_from_pool(#pool{init_count = InitCount,
                             free_count = NumFree,
                             consumer_to_pid = CPMap,
                             starting_members = StartingMembers0,
-                            member_start_timeout = StartTimeout} = Pool,
+                            member_start_timeout = StartTimeout,
+                            waiting_consumer = Waiting} = Pool,
                       From) ->
     send_metric(Pool, take_rate, 1, meter),
     StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
@@ -425,7 +451,14 @@ take_member_from_pool(#pool{init_count = InitCount,
         [] when NumCanAdd =< 0  ->
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
-            {error_no_members, Pool};
+            case queue:member(From, Waiting) of
+                true ->
+                    {error_no_members, Pool};
+                _    ->
+                    NewPool = 
+                        Pool#pool{waiting_consumer = queue:in(From, Waiting)},
+                    {error_no_members, NewPool}
+            end;
         [] when NumCanAdd > 0 ->
             %% Limit concurrently starting members to init_count. Add
             %% up to init_count members. Starting members here means
@@ -461,20 +494,34 @@ add_members_async(Count, #pool{starting_members = StartingMembers} = Pool) ->
     Pool#pool{starting_members = StartRefs ++ StartingMembers}.
 
 -spec do_return_member(pid(), ok | fail, #pool{}) -> #pool{}.
-do_return_member(Pid, ok, #pool{all_members = AllMembers} = Pool) ->
-    clean_group_table(Pid, Pool),
-    case dict:find(Pid, AllMembers) of
-        {ok, {MRef, CPid, _}} ->
-            #pool{free_pids = Free, in_use_count = NumInUse,
-                  free_count = NumFree} = Pool,
-            Pool1 = Pool#pool{free_pids = [Pid | Free], in_use_count = NumInUse - 1,
-                              free_count = NumFree + 1},
-            Entry = {MRef, free, os:timestamp()},
-            Pool1#pool{all_members = store_all_members(Pid, Entry, AllMembers),
-                       consumer_to_pid = cpmap_remove(Pid, CPid,
-                                                      Pool1#pool.consumer_to_pid)};
-        error ->
-            Pool
+do_return_member(Pid, ok, #pool{all_members = AllMembers, waiting_consumer = Waiting} = Pool) ->
+    case queue:is_empty(Waiting) of
+        true ->
+            %% no waiting, do return 
+            clean_group_table(Pid, Pool),
+            case dict:find(Pid, AllMembers) of
+                {ok, {MRef, CPid, _}} ->
+                    #pool{free_pids = Free, in_use_count = NumInUse,
+                    free_count = NumFree} = Pool,
+                    Pool1 = Pool#pool{free_pids = [Pid | Free], in_use_count = NumInUse - 1,
+                            free_count = NumFree + 1},
+                    Entry = {MRef, free, os:timestamp()},
+                    Pool1#pool{all_members = store_all_members(Pid, Entry, AllMembers),
+                    consumer_to_pid = cpmap_remove(Pid, CPid,
+                                        Pool1#pool.consumer_to_pid)};
+                error ->
+                    Pool
+            end;
+        _ ->
+            {{value, UserPid}, OtherWaiting} = queue:out(Waiting),
+            PoolNow = Pool#pool{waiting_consumer = OtherWaiting},
+            case erlang:is_process_alive(UserPid) of
+                true ->
+                    erlang:send(UserPid, {waiting_result, Pid}),
+                    PoolNow;
+                _->
+                    do_return_member(Pid, ok, PoolNow)
+            end
     end;
 do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
     % for the fail case, perhaps the member crashed and was alerady
@@ -674,3 +721,11 @@ time_as_micros({Time, mu}) ->
 
 secs_between({Mega1, Secs1, _}, {Mega2, Secs2, _}) ->
     (Mega2 - Mega1) * 1000000 + (Secs2 - Secs1).
+
+lock_timeout() ->
+    case application:get_env(pooler, lock_timeout) of
+        {ok, Val} ->
+            Val;
+        undefined ->
+            30000
+    end.
