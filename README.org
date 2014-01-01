@@ -197,8 +197,8 @@ reclaim the member.
 
 If you would like to obtain a member from a randomly selected pool in
 a group, call =pooler:take_group_member(Group)=. This will return a
-={Pool, Pid}= pair. You will need the =Pool= value to return the
-member to its pool.
+=Pid= which must be returned using =pooler:return_group_member/2= or
+=pooler:return_group_member/3=.
 
 *** pooler as an included application
 
