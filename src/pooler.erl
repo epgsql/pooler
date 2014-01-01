@@ -39,7 +39,8 @@
          manual_start/0,
          new_pool/1,
          pool_child_spec/1,
-         rm_pool/1]).
+         rm_pool/1,
+         rm_group/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -119,6 +120,25 @@ new_pool(PoolConfig) ->
 %% @doc Terminate the named pool.
 rm_pool(PoolName) ->
     pooler_sup:rm_pool(PoolName).
+
+%% @doc
+-spec rm_group(atom()) -> ok.
+rm_group(GroupName) ->
+    case pg2:get_local_members(GroupName) of
+        {error, {no_such_group, GroupName}} ->
+            ok;
+        Pools ->
+            rm_group_members(Pools),
+            pg2:delete(GroupName)
+    end.
+
+rm_group_members(MemberPids) ->
+    lists:foreach(
+      fun(MemberPid) ->
+              Pool = gen_server:call(MemberPid, dump_pool),
+              pooler_sup:rm_pool(Pool#pool.name)
+      end,
+      MemberPids).
 
 %% @doc Get child spec described by the proplist `PoolConfig'.
 %%
