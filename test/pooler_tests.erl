@@ -475,6 +475,7 @@ pooler_groups_test_() ->
        fun() ->
                ?assertEqual(ok, pooler:rm_pool(test_pool_1)),
                ?assertEqual(ok, pooler:rm_pool(test_pool_2)),
+               ?assertEqual(error_no_members, pooler:take_group_member(group_1)),
                ?assertEqual(ok, pooler:rm_group(group_1)),
 
                ?assertExit({noproc, _}, pooler:take_member(test_pool_1)),
