@@ -448,8 +448,7 @@ pooler_groups_test_() ->
       {"return error_no_member to group",
        fun() ->
                ?assertEqual(ok, pooler:return_group_member(group_1, error_no_members))
-       end},
-      
+       end},      
 
       {"exhaust pools in group",
        fun() ->
@@ -465,9 +464,50 @@ pooler_groups_test_() ->
                 error_no_members,
                 error_no_members] = [ pooler:take_group_member(group_1)
                                       || _I <- lists:seq(1, 3) ]
-       end}
-     ]}}.
+       end},
+
+      {"rm_group with nonexisting group",
+       fun() ->
+               ?assertEqual(ok, pooler:rm_group(i_dont_exist))
+       end},
+
+      {"rm_group with existing empty group",
+       fun() ->
+               ?assertEqual(ok, pooler:rm_pool(test_pool_1)),
+               ?assertEqual(ok, pooler:rm_pool(test_pool_2)),
+               ?assertEqual(error_no_members, pooler:take_group_member(group_1)),
+               ?assertEqual(ok, pooler:rm_group(group_1)),
+
+               ?assertExit({noproc, _}, pooler:take_member(test_pool_1)),
+               ?assertExit({noproc, _}, pooler:take_member(test_pool_2)),
+               ?assertEqual({error_no_group, group_1},
+                            pooler:take_group_member(group_1))
+       end},
+      
+      {"rm_group with existing non-empty group",
+       fun() ->
+               %% Verify that group members exist
+               MemberPid = pooler:take_group_member(group_1),
+               ?assert(is_pid(MemberPid)),
+               pooler:return_group_member(group_1, MemberPid),
+
+               Pool1Pid = pooler:take_member(test_pool_1),
+               ?assert(is_pid(Pool1Pid)),
+               pooler:return_member(test_pool_1, Pool1Pid),
+
+               Pool2Pid = pooler:take_member(test_pool_2),
+               ?assert(is_pid(Pool2Pid)),
+               pooler:return_member(test_pool_2, Pool2Pid),
+
+               %% Delete and verify that group and pools are destroyed
+               ?assertEqual(ok, pooler:rm_group(group_1)),
                
+               ?assertExit({noproc, _}, pooler:take_member(test_pool_1)),
+               ?assertExit({noproc, _}, pooler:take_member(test_pool_2)),
+               ?assertEqual({error_no_group, group_1},
+                            pooler:take_group_member(group_1))
+       end}      
+     ]}}.          
 
 pooler_limit_failed_adds_test_() ->
     %% verify that pooler crashes completely if too many failures are

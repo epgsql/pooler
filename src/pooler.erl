@@ -39,7 +39,8 @@
          manual_start/0,
          new_pool/1,
          pool_child_spec/1,
-         rm_pool/1]).
+         rm_pool/1,
+         rm_group/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -119,6 +120,43 @@ new_pool(PoolConfig) ->
 %% @doc Terminate the named pool.
 rm_pool(PoolName) ->
     pooler_sup:rm_pool(PoolName).
+
+%% @doc Terminates the group and all pools in that group.
+%%
+%% If termination of any member pool fails, `rm_group/1` returns
+%% `{error, {failed_delete_pools, Pools}}`, where `Pools` is a list
+%% of pools that failed to terminate.
+%%
+%% The group is NOT terminated if any member pool did not
+%% successfully terminate.
+%%
+-spec rm_group(atom()) -> ok | {error, {failed_rm_pools, [atom()]}}.
+rm_group(GroupName) ->
+    case pg2:get_local_members(GroupName) of
+        {error, {no_such_group, GroupName}} ->
+            ok;
+        Pools ->
+            case rm_group_members(Pools) of
+                [] ->
+                    pg2:delete(GroupName);
+                Failures ->
+                    {error, {failed_rm_pools, Failures}}
+            end
+    end.
+
+-spec rm_group_members([pid()]) -> [atom()].
+rm_group_members(MemberPids) ->
+    lists:foldl(
+      fun(MemberPid, Acc) ->
+              Pool = gen_server:call(MemberPid, dump_pool),
+              PoolName = Pool#pool.name,
+              case pooler_sup:rm_pool(PoolName) of
+                  ok -> Acc;
+                  _  -> [PoolName | Acc]
+              end
+      end,
+      [],
+      MemberPids).
 
 %% @doc Get child spec described by the proplist `PoolConfig'.
 %%
