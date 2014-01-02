@@ -506,7 +506,7 @@ pooler_groups_test_() ->
                ?assertExit({noproc, _}, pooler:take_member(test_pool_2)),
                ?assertEqual({error_no_group, group_1},
                             pooler:take_group_member(group_1))
-       end}
+       end}      
      ]}}.          
 
 pooler_limit_failed_adds_test_() ->
