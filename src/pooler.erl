@@ -130,7 +130,7 @@ rm_pool(PoolName) ->
 %% The group is NOT terminated if any member pool did not
 %% successfully terminate.
 %%
--spec rm_group(atom()) -> ok | {error, {failed_delete_pools, [atom()]}}.
+-spec rm_group(atom()) -> ok | {error, {failed_rm_pools, [atom()]}}.
 rm_group(GroupName) ->
     case pg2:get_local_members(GroupName) of
         {error, {no_such_group, GroupName}} ->
