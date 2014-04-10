@@ -46,13 +46,13 @@
           %% Status is either 'free' or the consumer pid, and Time is
           %% an Erlang timestamp that records when the member became
           %% free.
-          all_members = dict:new()     :: dict(),
+          all_members = dict:new()     :: dict:dict(),
 
           %% Maps consumer pid to a tuple of the form:
           %% {MonitorRef, MemberList} where MonitorRef is a monitor
           %% reference for the consumer and MemberList is a list of
           %% members being consumed.
-          consumer_to_pid = dict:new() :: dict(),
+          consumer_to_pid = dict:new() :: dict:dict(),
 
           %% A list of `{References, Timestamp}' tuples representing
           %% new member start requests that are in-flight. The
