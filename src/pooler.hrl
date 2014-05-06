@@ -9,6 +9,12 @@
 -type time_unit() :: min | sec | ms | mu.
 -type time_spec() :: {non_neg_integer(), time_unit()}.
 
+-ifdef(namespaced_types).
+-type p_dict() :: dict:dict().
+-else.
+-type p_dict() :: dict().
+-endif.
+
 -record(pool, {
           name             :: atom(),
           group            :: atom(),
@@ -46,13 +52,14 @@
           %% Status is either 'free' or the consumer pid, and Time is
           %% an Erlang timestamp that records when the member became
           %% free.
-          all_members = dict:new()     :: dict(),
+
+          all_members = dict:new()     :: p_dict(),
 
           %% Maps consumer pid to a tuple of the form:
           %% {MonitorRef, MemberList} where MonitorRef is a monitor
           %% reference for the consumer and MemberList is a list of
           %% members being consumed.
-          consumer_to_pid = dict:new() :: dict(),
+          consumer_to_pid = dict:new() :: p_dict(),
 
           %% A list of `{References, Timestamp}' tuples representing
           %% new member start requests that are in-flight. The
@@ -72,5 +79,3 @@
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
 -define(gv(X, Y, D), proplists:get_value(X, Y, D)).
-
-
