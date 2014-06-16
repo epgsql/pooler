@@ -11,6 +11,11 @@ ifeq ($(ERL),)
 $(error "Erlang not available on this system")
 endif
 
+DIALYZER=$(shell which dialyzer)
+ifeq ($(DIALYZER),)
+	 $(error "Dialyzer not available on this system")
+endif
+
 REBAR=$(shell which rebar)
 
 # If building on travis, use the rebar in the current directory
@@ -53,10 +58,10 @@ $(DEPS_PLT): compile
 	@echo Building local erts plt at $(DEPS_PLT)
 	@echo
 	$(DIALYZER) --output_plt $(DEPS_PLT) --build_plt \
-	   --apps erts kernel stdlib -r deps
+	   --apps erts kernel stdlib
 
 dialyzer: compile $(DEPS_PLT)
-	@dialyzer -Wunderspecs -r ebin
+	$(DIALYZER) --plt $(DEPS_PLT) -Wunderspecs -r ebin
 
 doc:
 	$(REBAR) doc skip_deps=true
