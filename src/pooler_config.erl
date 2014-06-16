@@ -20,7 +20,8 @@ list_to_pool(P) ->
        cull_interval     = ?gv(cull_interval, P, ?DEFAULT_CULL_INTERVAL),
        max_age           = ?gv(max_age, P, ?DEFAULT_MAX_AGE),
        member_start_timeout = ?gv(member_start_timeout, P, ?DEFAULT_MEMBER_START_TIMEOUT),
-       metrics_mod       = ?gv(metrics_mod, P, pooler_no_metrics)}.
+       metrics_mod       = ?gv(metrics_mod, P, pooler_no_metrics),
+       metrics_api       = ?gv(metrics_api, P, folsom)}.
 
 %% Return `Value' for `Key' in proplist `P' or crashes with an
 %% informative message if no value is found.

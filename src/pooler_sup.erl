@@ -21,8 +21,10 @@ init([]) ->
                  undefined ->
                      []
              end,
-    MetricsConfig = {metrics_mod, metrics_module()},
-    Pools = [ pooler_config:list_to_pool([MetricsConfig | L]) || L <- Config ],
+    {MetricsApi, MetricsMod} = metrics_module(),
+    MetricsConfig = [{metrics_mod, MetricsMod},
+                     {metrics_api, MetricsApi}],
+    Pools = [ pooler_config:list_to_pool(MetricsConfig ++ L) || L <- Config ],
     PoolSupSpecs = [ pool_sup_spec(Pool) || Pool <- Pools ],
     ets:new(?POOLER_GROUP_TABLE, [set, public, named_table, {write_concurrency, true}]),
     {ok, {{one_for_one, 5, 60}, [starter_sup_spec() | PoolSupSpecs]}}.
@@ -36,8 +38,9 @@ new_pool(PoolConfig) ->
 %% @doc Create a child spec for new pool from proplist pool config `PoolConfig'. The
 %% public API for this functionality is {@link pooler:pool_child_spec/1}.
 pool_child_spec(PoolConfig) ->
-    MetricsConfig = {metrics_mod, metrics_module()},
-    NewPool = pooler_config:list_to_pool([MetricsConfig | PoolConfig]),
+    {MetricsApi, MetricsMod} = metrics_module(),
+    NewPool = pooler_config:list_to_pool([{metrics_mod, MetricsMod},
+                                          {metrics_api, MetricsApi}] ++ PoolConfig),
     pool_sup_spec(NewPool).
 
 %% @doc Shutdown the named pool.
@@ -67,7 +70,13 @@ pool_sup_name(Name) ->
 metrics_module() ->
     case application:get_env(pooler, metrics_module) of
         {ok, Mod} ->
-            Mod;
+            case application:get_env(pooler, metrics_api) of
+                {ok, exometer} ->
+                    {exometer, Mod};
+                % folsom is the default
+                _V ->
+                    {folsom, Mod}
+            end;
         undefined ->
-            pooler_no_metrics
+            {folsom, pooler_no_metrics}
     end.

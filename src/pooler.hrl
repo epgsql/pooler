@@ -74,7 +74,11 @@
           %% 'pooler_no_metrics', then metric sending calls do
           %% nothing. A typical value to actually capture metrics is
           %% folsom_metrics.
-          metrics_mod = pooler_no_metrics :: atom()
+          metrics_mod = pooler_no_metrics :: atom(),
+
+          %% The API used to call the metrics system. It supports both Folsom
+          %% and Exometer format.
+          metrics_api = folsom :: 'folsom' | 'exometer'
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).

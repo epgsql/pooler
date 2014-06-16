@@ -680,7 +680,28 @@ expired_free_members(Members, Now, MaxAge) ->
                   Type  :: metric_type()) -> ok.
 send_metric(#pool{metrics_mod = pooler_no_metrics}, _Label, _Value, _Type) ->
     ok;
-send_metric(#pool{name = PoolName, metrics_mod = MetricsMod}, Label, Value, Type) ->
+send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
+                  metrics_api = exometer}, Label, {inc, Value}, counter) ->
+    MetricName = pool_metric_exometer(PoolName, Label),
+    MetricsMod:update_or_create(MetricName, Value, counter, []),
+    ok;
+send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
+                   metrics_api = exometer}, Label, {dec, Value}, counter) ->
+    MetricName = pool_metric_exometer(PoolName, Label),
+    MetricsMod:update_or_create(MetricName, - Value, counter, []),
+    ok;
+% Exometer does not support 'history' type metrics right now.
+send_metric(#pool{name = _PoolName, metrics_mod = _MetricsMod,
+                  metrics_api = exometer}, _Label, _Value, history) ->
+    ok;
+send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
+                   metrics_api = exometer}, Label, Value, Type) ->
+    MetricName = pool_metric_exometer(PoolName, Label),
+    MetricsMod:update_or_create(MetricName, Value, Type, []),
+    ok;
+%folsom API is the default one.
+send_metric(#pool{name = PoolName, metrics_mod = MetricsMod, metrics_api = folsom},
+                   Label, Value, Type) ->
     MetricName = pool_metric(PoolName, Label),
     MetricsMod:notify(MetricName, Value, Type),
     ok.
@@ -689,6 +710,13 @@ send_metric(#pool{name = PoolName, metrics_mod = MetricsMod}, Label, Value, Type
 pool_metric(PoolName, Metric) ->
     iolist_to_binary([<<"pooler.">>, atom_to_binary(PoolName, utf8),
                       ".", atom_to_binary(Metric, utf8)]).
+
+%% Exometer metric names are lists, not binaries.
+-spec pool_metric_exometer(atom(), atom()) -> nonempty_list(binary()).
+pool_metric_exometer(PoolName, Metric) ->
+    [<<"pooler">>, atom_to_binary(PoolName, utf8),
+     atom_to_binary(Metric, utf8)].
+
 
 -spec time_as_secs(time_spec()) -> non_neg_integer().
 time_as_secs({Time, Unit}) ->
