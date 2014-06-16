@@ -7,4 +7,5 @@ doc/*.html
 /doc/edoc-info
 /bench/tests
 /bench/deps
-
+/logs/
+.deps_plt
