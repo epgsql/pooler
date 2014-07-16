@@ -75,9 +75,14 @@ manual_start() ->
 %% <dl>
 %% <dt>`name'</dt>
 %% <dd>An atom giving the name of the pool.</dd>
+%% <dt>`lazy'</dt>
+%% <dd>A boolean specifing whether to start any members on launch.
+%% When true, the pool won't initialize any members until the first
+%% request.</dd>
 %% <dt>`init_count'</dt>
-%% <dd>Number of members to add to the pool at start. When the pool is
-%% started, `init_count' members will be started in parallel.</dd>
+%% <dd>Number of members to add to the pool when it needs to grow.
+%% When a member is request but none are available, `init_count'
+%% members will be started in parallel up to `max_count`.</dd>
 %% <dt>`max_count'</dt>
 %% <dd>Maximum number of members in the pool.</dd>
 %% <dt>`start_mfa'</dt>
@@ -282,13 +287,12 @@ pool_stats(PoolName) ->
 
 -spec init(#pool{}) -> {'ok', #pool{}, 0}.
 init(#pool{}=Pool) ->
-    #pool{init_count = N} = Pool,
     MemberSup = pooler_pool_sup:member_sup_name(Pool),
     Pool1 = set_member_sup(Pool, MemberSup),
     %% This schedules the next cull when the pool is configured for
     %% such and is otherwise a no-op.
     Pool2 = cull_members_from_pool(Pool1),
-    {ok, NewPool} = init_members_sync(N, Pool2),
+    {ok, NewPool} = init_members_sync(Pool2),
     %% trigger an immediate timeout, handled by handle_info to allow
     %% us to register with pg2. We use the timeout mechanism to ensure
     %% that a server is added to a group only when it is ready to
@@ -417,11 +421,15 @@ starting_member_not_stale(Pool, Now, {_Ref, StartTime}, MaxAgeSecs) ->
             false
     end.
 
-init_members_sync(N, #pool{name = PoolName} = Pool) ->
+init_members_sync(#pool{name = PoolName, lazy = Lazy, init_count = N} = Pool) ->
     Self = self(),
     StartTime = os:timestamp(),
+    StartCount = case Lazy of
+                     true -> 0;
+                     false -> N
+                 end,
     StartRefs = [ {pooler_starter:start_member(Pool, Self), StartTime}
-                  || _I <- lists:seq(1, N) ],
+                  || _I <- lists:seq(1, StartCount) ],
     Pool1 = Pool#pool{starting_members = StartRefs},
     case collect_init_members(Pool1) of
         timeout ->

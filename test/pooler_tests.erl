@@ -184,6 +184,76 @@ pooler_basics_integration_to_other_supervisor_test_() ->
      basic_tests()}}.
 
 
+pooler_lazy_init_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{lazy, true},
+                     {name, test_pool_1},
+                     {max_count, 3},
+                     {init_count, 2},
+                     {start_mfa,
+                      {pooled_gs, start_link, [{"type-0"}]}}],
+             io:format("drappLog Doing my test!!!!!!!  ~p~n", [Pool ]),
+             application:unset_env(pooler, pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(pooler),
+             pooler:new_pool(Pool)
+     end,
+     fun(_) ->
+             application:stop(pooler)
+     end,
+     [
+      {"there are 0 members at start",
+       fun() ->
+               Stats = [ P || {P, {_, free, _}} <- pooler:pool_stats(test_pool_1) ],
+               ?assertEqual(0, length(Stats))
+       end
+      }
+     ]
+    }}.
+
+pooler_lazy_init_start_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{lazy, true},
+                     {name, test_pool_1},
+                     {max_count, 3},
+                     {init_count, 2},
+                     {start_mfa,
+                      {pooled_gs, start_link, [{"type-0"}]}}],
+             io:format("drappLog Doing my test!!!!!!!  ~p~n", [Pool ]),
+             application:unset_env(pooler, pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(pooler),
+             pooler:new_pool(Pool),
+             % trigger creation
+             error_no_members = pooler:take_member(test_pool_1)
+     end,
+     fun(_) ->
+             application:stop(pooler)
+     end,
+     basic_tests()
+    }}.
+
+
 basic_tests() ->
      [
       {"there are init_count members at start",

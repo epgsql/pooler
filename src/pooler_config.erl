@@ -15,6 +15,7 @@ list_to_pool(P) ->
        group             = ?gv(group, P),
        max_count         = req(max_count, P),
        init_count        = req(init_count, P),
+       lazy              = ?gv(lazy, P, false),
        start_mfa         = req(start_mfa, P),
        add_member_retry  = ?gv(add_member_retry, P, ?DEFAULT_ADD_RETRY),
        cull_interval     = ?gv(cull_interval, P, ?DEFAULT_CULL_INTERVAL),
