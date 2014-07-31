@@ -8,3 +8,6 @@ doc/*.html
 /bench/tests
 /bench/deps
 
+/.concrete/
+/.rebar/
+/deps/
