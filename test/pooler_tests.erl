@@ -1,6 +1,7 @@
 -module(pooler_tests).
 
 -include_lib("eunit/include/eunit.hrl").
+-include("../src/pooler.hrl").
 
 -compile([export_all]).
 
@@ -291,6 +292,25 @@ basic_tests() ->
                ?assertEqual(ok, pooler:return_member(test_pool_1, Bogus2, fail))
        end
       },
+
+      {"it is ok to return a pid more than once",
+       fun() ->
+               M = pooler:take_member(test_pool_1),
+               [ pooler:return_member(test_pool_1, M)
+                 || _I <- lists:seq(1, 37) ],
+               M1 = pooler:take_member(test_pool_1),
+               M2 = pooler:take_member(test_pool_1),
+               ?assert(M1 =/= M2),
+               Pool1 = gen_server:call(test_pool_1, dump_pool),
+               ?assertEqual(2, Pool1#pool.in_use_count),
+               ?assertEqual(0, Pool1#pool.free_count),
+               pooler:return_member(test_pool_1, M1),
+               pooler:return_member(test_pool_1, M2),
+               Pool2 = gen_server:call(test_pool_1, dump_pool),
+               ?assertEqual(0, Pool2#pool.in_use_count),
+               ?assertEqual(2, Pool2#pool.free_count),
+               ok
+       end},
 
       {"calling return_member on error_no_members is ignored",
        fun() ->

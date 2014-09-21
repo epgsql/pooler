@@ -499,9 +499,14 @@ add_members_async(Count, #pool{starting_members = StartingMembers} = Pool) ->
     Pool#pool{starting_members = StartRefs ++ StartingMembers}.
 
 -spec do_return_member(pid(), ok | fail, #pool{}) -> #pool{}.
-do_return_member(Pid, ok, #pool{all_members = AllMembers} = Pool) ->
+do_return_member(Pid, ok, #pool{name = PoolName,
+                                all_members = AllMembers} = Pool) ->
     clean_group_table(Pid, Pool),
     case dict:find(Pid, AllMembers) of
+        {ok, {_, free, _}} ->
+            Fmt = "pool '~s': ignored return of free member ~p",
+            error_logger:warning_msg(Fmt, [PoolName, Pid]),
+            Pool;
         {ok, {MRef, CPid, _}} ->
             #pool{free_pids = Free, in_use_count = NumInUse,
                   free_count = NumFree} = Pool,
