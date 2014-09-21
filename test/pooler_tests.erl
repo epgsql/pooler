@@ -569,49 +569,45 @@ pooler_scheduled_cull_test_() ->
              fake_metrics:stop(),
              application:stop(pooler)
      end,
-     [{"excess members are culled repeatedly",
-       fun() ->
-               %% take all members
-               Pids1 = get_n_pids(test_pool_1, 10, []),
-               %% return all
-               [ pooler:return_member(test_pool_1, P) || P <- Pids1 ],
-               ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
-               %% wait for longer than cull delay
-               timer:sleep(250),
-               ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
+     [
+       {foreach,
+        fun() ->
+                Pids = get_n_pids(test_pool_1, 10, []),
+                ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
+                ?assertEqual(10, length(Pids)),
+                Pids
+        end,
+        fun(Pids) ->
+                [ pooler:return_member(test_pool_1, P) || P <- Pids ]
+        end,
+        [
+         fun(Pids) ->
+                 {"excess members are culled run 1",
+                  fun() ->
+                          [ pooler:return_member(test_pool_1, P) || P <- Pids ],
+                          %% wait for longer than cull delay
+                          timer:sleep(250),
+                          ?assertEqual(2, length(pooler:pool_stats(test_pool_1)))
+                  end}
+         end,
 
-               %% repeat the test to verify that culling gets rescheduled.
-               Pids2 = get_n_pids(test_pool_1, 10, []),
-               %% return all
-               [ pooler:return_member(test_pool_1, P) || P <- Pids2 ],
-               ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
-               %% wait for longer than cull delay
-               timer:sleep(250),
-               ?assertEqual(2, length(pooler:pool_stats(test_pool_1)))
-       end
-      },
+         fun(Pids) ->
+                 {"excess members are culled run 2",
+                  fun() ->
+                          [ pooler:return_member(test_pool_1, P) || P <- Pids ],
+                          %% wait for longer than cull delay
+                          timer:sleep(250),
+                          ?assertEqual(2, length(pooler:pool_stats(test_pool_1)))
+                  end}
+         end,
 
-      {"non-excess members are not culled",
-       fun() ->
-               [P1, P2] = [pooler:take_member(test_pool_1) || _X <- [1, 2] ],
-               [pooler:return_member(test_pool_1, P) || P <- [P1, P2] ],
-               ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
-               timer:sleep(250),
-               ?assertEqual(2, length(pooler:pool_stats(test_pool_1)))
-       end
-      },
-
-      {"in-use members are not culled",
-       fun() ->
-               %% take all members
-               Pids = get_n_pids(test_pool_1, 10, []),
-               %% don't return any
-               ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
-               %% wait for longer than cull delay
-               timer:sleep(250),
-               ?assertEqual(10, length(pooler:pool_stats(test_pool_1))),
-               [ pooler:return_member(test_pool_1, P) || P <- Pids ]
-       end},
+         fun(Pids) -> in_use_members_not_culled(Pids, 1) end,
+         fun(Pids) -> in_use_members_not_culled(Pids, 2) end,
+         fun(Pids) -> in_use_members_not_culled(Pids, 3) end,
+         fun(Pids) -> in_use_members_not_culled(Pids, 4) end,
+         fun(Pids) -> in_use_members_not_culled(Pids, 5) end,
+         fun(Pids) -> in_use_members_not_culled(Pids, 6) end
+        ]},
 
       {"no cull when init_count matches max_count",
        %% not sure how to verify this. But this test at least
@@ -629,6 +625,24 @@ pooler_scheduled_cull_test_() ->
                ok
        end}
      ]}.
+
+in_use_members_not_culled(Pids, N) ->
+    {"in-use members are not culled " ++ erlang:integer_to_list(N),
+     fun() ->
+             %% wait for longer than cull delay
+             timer:sleep(250),
+             PidCount = length(Pids),
+             ?assertEqual(PidCount,
+                          length(pooler:pool_stats(test_pool_1))),
+             Returns = lists:sublist(Pids, N),
+             [ pooler:return_member(test_pool_1, P)
+               || P <- Returns ],
+             timer:sleep(250),
+
+             ?assertEqual(PidCount - N,
+                          length(pooler:pool_stats(test_pool_1)))
+     end}.
+
 
 random_message_test_() ->
     {setup,
