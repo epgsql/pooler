@@ -6,14 +6,14 @@
 
 -behaviour(supervisor).
 
--export([new_starter/3,
+-export([new_starter/2,
          start_link/0,
          init/1]).
 
 -include("pooler.hrl").
 
-new_starter(Pool, Ref, Parent) ->
-    supervisor:start_child(?MODULE, [Pool, Ref, Parent]).
+new_starter(Pool, Parent) ->
+    supervisor:start_child(?MODULE, [Pool, Parent]).
 
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).

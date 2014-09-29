@@ -36,6 +36,10 @@
 
 start_link(Args ={_Type}) ->
     % not registered
+    gen_server:start_link(?MODULE, Args, []);
+
+start_link(Args ={_Type, _InitFun}) ->
+    % not registered
     gen_server:start_link(?MODULE, Args, []).
 
 %% @doc return the type argument passed to this worker at start time
@@ -73,7 +77,12 @@ stop(S) ->
          }).
 
 init({Type}) ->
+    {ok, #state{type = Type, id = make_ref()}};
+init({Type, StartFun}) ->
+    StartFun(),
     {ok, #state{type = Type, id = make_ref()}}.
+
+
 
 handle_call(get_id, _From, State) ->
     {reply, {State#state.type, State#state.id}, State};
