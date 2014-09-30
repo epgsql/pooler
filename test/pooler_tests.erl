@@ -371,8 +371,8 @@ basic_tests() ->
       {"accept bad member is handled",
        fun() ->
                Bad = spawn(fun() -> ok end),
-               Ref = erlang:make_ref(),
-               ?assertEqual(ok, pooler:accept_member(test_pool_1, {Ref, Bad}))
+               FakeStarter = spawn(fun() -> starter end),
+               ?assertEqual(ok, pooler:accept_member(test_pool_1, {FakeStarter, Bad}))
        end}
       ].
 
@@ -684,6 +684,51 @@ random_message_test_() ->
      end
     ]}.
 
+pooler_integration_long_init_test_() ->
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{name, test_pool_1},
+                       {max_count, 10},
+                       {init_count, 0},
+                       {member_start_timeout, {10, ms}},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-0", fun() -> timer:sleep(15) end}]}}],
+
+             application:set_env(pooler, pools, [Pool]),
+             application:start(pooler)
+     end,
+     % cleanup
+     fun(_) ->
+             application:stop(pooler)
+     end,
+     %
+     [
+      fun(_) ->
+              % Test what happens when pool members take too long to start.
+              % The pooler_starter should kill off stale members, there by
+              % reducing the number of children of the member_sup. This
+              % activity occurs both during take member and accept member.
+              % Accordingly, the count should go to zero once all starters
+              % check in.
+              fun() ->
+                      ?assertEqual(0, children_count(pooler_test_pool_1_member_sup)),
+                      [begin
+                           ?assertEqual(error_no_members, pooler:take_member(test_pool_1)),
+                           ?assertEqual(1, starting_members(test_pool_1))
+                       end
+                               || _ <- lists:seq(1,10)],
+                      ?assertEqual(10, children_count(pooler_test_pool_1_member_sup)),
+
+                      timer:sleep(150),
+                      ?assertEqual(0, children_count(pooler_test_pool_1_member_sup)),
+                      ?assertEqual(0, starting_members(test_pool_1))
+              end
+      end
+     ]
+     }.
+    
+
 pooler_integration_test_() ->
     {foreach,
      % setup
@@ -787,3 +832,9 @@ get_n_pids_group(Group, N, Acc) ->
         Pid ->
             get_n_pids_group(Group, N - 1, [Pid|Acc])
     end.
+
+children_count(SupId) ->
+    length(supervisor:which_children(SupId)).
+
+starting_members(PoolName) ->
+    length((gen_server:call(PoolName, dump_pool))#pool.starting_members).

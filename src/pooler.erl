@@ -297,7 +297,6 @@ init(#pool{}=Pool) ->
 
 set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
-
 handle_call(take_member, {CPid, _Tag}, #pool{} = Pool) ->
     {Member, NewPool} = take_member_from_pool(Pool, CPid),
     {reply, Member, NewPool};
@@ -363,7 +362,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
-do_accept_member({Ref, Pid},
+do_accept_member({StarterPid, Pid},
                  #pool{
                     all_members = AllMembers,
                     free_pids = Free,
@@ -372,49 +371,57 @@ do_accept_member({Ref, Pid},
                     member_start_timeout = StartTimeout
                    } = Pool) when is_pid(Pid) ->
     %% make sure we don't accept a timedout member
-    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
-                                                    StartTimeout),
-    case lists:keymember(Ref, 1, StartingMembers) of
+    Pool1 = #pool{starting_members = StartingMembers}= remove_stale_starting_members(Pool, StartingMembers0, StartTimeout),
+    case lists:keymember(StarterPid, 1, StartingMembers) of
         false ->
-            %% a pid we didn't ask to start, ignore it.
-            %% should we log it?
-            Pool;
+            %% A starter completed even though we invalidated the pid
+            %% Ask the starter to kill the child and stop. In most cases, the
+            %% starter has already received this message. However, when pools
+            %% are dynamically re-created with the same name, it is possible
+            %% to receive an accept from a pool that has since gone away.
+            %% In this case, we should cleanup.
+            pooler_starter:stop_member_async(StarterPid),
+            Pool1;
         true ->
-            StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
+            StartingMembers1 = lists:keydelete(StarterPid, 1, StartingMembers),
             MRef = erlang:monitor(process, Pid),
             Entry = {MRef, free, os:timestamp()},
             AllMembers1 = store_all_members(Pid, Entry, AllMembers),
+            pooler_starter:stop(StarterPid),
             Pool#pool{free_pids = Free ++ [Pid],
                       free_count = NumFree + 1,
                       all_members = AllMembers1,
                       starting_members = StartingMembers1}
     end;
-do_accept_member({Ref, _Reason}, #pool{starting_members = StartingMembers0,
+do_accept_member({StarterPid, _Reason}, #pool{starting_members = StartingMembers0,
                                        member_start_timeout = StartTimeout} = Pool) ->
     %% member start failed, remove in-flight ref and carry on.
-    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
+    pooler_starter:stop(StarterPid),
+    Pool1 = #pool{starting_members = StartingMembers} = remove_stale_starting_members(Pool, StartingMembers0,
                                                     StartTimeout),
-    StartingMembers1 = lists:keydelete(Ref, 1, StartingMembers),
-    Pool#pool{starting_members = StartingMembers1}.
+    StartingMembers1 = lists:keydelete(StarterPid, 1, StartingMembers),
+    Pool1#pool{starting_members = StartingMembers1}.
 
 
 -spec remove_stale_starting_members(#pool{}, [{reference(), erlang:timestamp()}],
-                                    time_spec()) -> [{reference(), erlang:timestamp()}].
+                                    time_spec()) -> #pool{}.
 remove_stale_starting_members(Pool, StartingMembers, MaxAge) ->
     Now = os:timestamp(),
     MaxAgeSecs = time_as_secs(MaxAge),
-    lists:filter(fun(SM) ->
-                         starting_member_not_stale(Pool, Now, SM, MaxAgeSecs)
-                 end, StartingMembers).
+    FilteredStartingMembers = lists:foldl(fun(SM, AccIn) ->
+                         accumulate_starting_member_not_stale(Pool, Now, SM, MaxAgeSecs, AccIn)
+                 end, [], StartingMembers),
+    Pool#pool{starting_members = FilteredStartingMembers}.
 
-starting_member_not_stale(Pool, Now, {_Ref, StartTime}, MaxAgeSecs) ->
+accumulate_starting_member_not_stale(Pool, Now, SM = {Pid, StartTime}, MaxAgeSecs, AccIn) ->
     case secs_between(StartTime, Now) < MaxAgeSecs of
         true ->
-            true;
+            [SM | AccIn];
         false ->
             error_logger:error_msg("pool '~s': starting member timeout", [Pool#pool.name]),
             send_metric(Pool, starting_member_timeout, {inc, 1}, counter),
-            false
+            pooler_starter:stop_member_async(Pid),
+            AccIn
     end.
 
 init_members_sync(N, #pool{name = PoolName} = Pool) ->
@@ -452,18 +459,18 @@ take_member_from_pool(#pool{init_count = InitCount,
                             in_use_count = NumInUse,
                             free_count = NumFree,
                             consumer_to_pid = CPMap,
-                            starting_members = StartingMembers0,
+                            starting_members = StartingMembers,
                             member_start_timeout = StartTimeout} = Pool,
                       From) ->
     send_metric(Pool, take_rate, 1, meter),
-    StartingMembers = remove_stale_starting_members(Pool, StartingMembers0,
-                                                    StartTimeout),
-    NumCanAdd = Max - (NumInUse + NumFree + length(StartingMembers)),
+    Pool1 = remove_stale_starting_members(Pool, StartingMembers, StartTimeout),
+    NonStaleStartingMemberCount = length(Pool1#pool.starting_members),
+    NumCanAdd = Max - (NumInUse + NumFree + NonStaleStartingMemberCount),
     case Free of
         [] when NumCanAdd =< 0  ->
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
-            {error_no_members, Pool};
+            {error_no_members, Pool1};
         [] when NumCanAdd > 0 ->
             %% Limit concurrently starting members to init_count. Add
             %% up to init_count members. Starting members here means
@@ -472,20 +479,20 @@ take_member_from_pool(#pool{init_count = InitCount,
             %% members, the pool should reach a steady state with
             %% unused members culled over time (if scheduled cull is
             %% enabled).
-            NumToAdd = min(InitCount - length(StartingMembers), NumCanAdd),
-            Pool1 = add_members_async(NumToAdd, Pool),
+            NumToAdd = max(min(InitCount - NonStaleStartingMemberCount, NumCanAdd), 1),
+            Pool2 = add_members_async(NumToAdd, Pool1),
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
             send_metric(Pool, events, error_no_members, history),
-            {error_no_members, Pool1};
+            {error_no_members, Pool2};
         [Pid|Rest] ->
-            Pool1 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
+            Pool2 = Pool1#pool{free_pids = Rest, in_use_count = NumInUse + 1,
                               free_count = NumFree - 1},
-            send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
-            send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
-            {Pid, Pool1#pool{
+            send_metric(Pool, in_use_count, Pool2#pool.in_use_count, histogram),
+            send_metric(Pool, free_count, Pool2#pool.free_count, histogram),
+            {Pid, Pool2#pool{
                     consumer_to_pid = add_member_to_consumer(Pid, From, CPMap),
                     all_members = set_cpid_for_member(Pid, From,
-                                                      Pool1#pool.all_members)
+                                                      Pool2#pool.all_members)
                    }}
     end.
 
