@@ -111,7 +111,7 @@ handle_cast(accept_member, #starter{msg = Msg, parent = Parent, pool = #pool{nam
     {noreply, State};
 
 handle_cast(stop, State) ->
-    {stop, normal, stop_ok, State};
+    {stop, normal, State};
 
 
 handle_cast(_Request, State) ->
