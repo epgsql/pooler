@@ -3,6 +3,7 @@
 -define(DEFAULT_MAX_AGE, {30, sec}).
 -define(DEFAULT_MEMBER_START_TIMEOUT, {1, min}).
 -define(POOLER_GROUP_TABLE, pooler_group_table).
+-define(DEFAULT_POOLER_QUEUE_MAX, 50).
 
 -type member_info() :: {string(), free | pid(), {_, _, _}}.
 -type free_member_info() :: {string(), free, {_, _, _}}.
@@ -11,8 +12,10 @@
 
 -ifdef(namespaced_types).
 -type p_dict() :: dict:dict().
+-type p_requestor_queue() :: queue:queue({{pid(), _}, timer:tref()}).
 -else.
 -type p_dict() :: dict().
+-type p_requestor_queue() :: queue().
 -endif.
 
 -record(pool, {
@@ -78,7 +81,12 @@
 
           %% The API used to call the metrics system. It supports both Folsom
           %% and Exometer format.
-          metrics_api = folsom :: 'folsom' | 'exometer'
+          metrics_api = folsom :: 'folsom' | 'exometer',
+
+          %% A queue of requestors for blocking take member requests
+          queued_requestors = queue:new() :: p_requestor_queue(),
+          %% The max depth of the queue
+          queue_max = 50
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
