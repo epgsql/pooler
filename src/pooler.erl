@@ -536,51 +536,12 @@ take_member_from_pool(#pool{init_count = InitCount,
 
 -spec take_member_from_pool_queued(#pool{}, pid(), {pid(), term()}) ->
                                    {error_no_members | pid(), #pool{}}.
-take_member_from_pool_queued(#pool{init_count = InitCount,
-                            max_count = Max,
-                            free_pids = Free,
-                            in_use_count = NumInUse,
-                            free_count = NumFree,
-                            consumer_to_pid = CPMap,
-                            starting_members = StartingMembers,
-                            member_start_timeout = StartTimeout,
-                            queued_requestors = QueuedRequestors
-                                  } = Pool,
-                      CPid, From) ->
-    send_metric(Pool, take_rate, 1, meter),
-    Pool1 = remove_stale_starting_members(Pool, StartingMembers, StartTimeout),
-    NonStaleStartingMemberCount = length(Pool1#pool.starting_members),
-    NumCanAdd = Max - (NumInUse + NumFree + NonStaleStartingMemberCount),
-    case Free of
-        [] when NumCanAdd =< 0  ->
-            send_metric(Pool, error_no_members_count, {inc, 1}, counter),
-            send_metric(Pool, events, error_no_members, history),
-            io:format("Queueing request ~p~n", [CPid]),
+take_member_from_pool_queued(Pool0, CPid, From) ->
+    case take_member_from_pool(Pool0, CPid) of
+        {error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}} ->
             {error_no_members, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
-        [] when NumCanAdd > 0 ->
-            %% Limit concurrently starting members to init_count. Add
-            %% up to init_count members. Starting members here means
-            %% we always return an error_no_members for a take request
-            %% when all members are in-use. By adding a batch of new
-            %% members, the pool should reach a steady state with
-            %% unused members culled over time (if scheduled cull is
-            %% enabled).
-            NumToAdd = max(min(InitCount - NonStaleStartingMemberCount, NumCanAdd), 1),
-            Pool2 = add_members_async(NumToAdd, Pool1),
-            send_metric(Pool, error_no_members_count, {inc, 1}, counter),
-            send_metric(Pool, events, error_no_members, history),
-            io:format("Queueing request ~p~n", [From]),
-            {error_no_members, Pool2#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
-        [Pid|Rest] ->
-            Pool2 = Pool1#pool{free_pids = Rest, in_use_count = NumInUse + 1,
-                              free_count = NumFree - 1},
-            send_metric(Pool, in_use_count, Pool2#pool.in_use_count, histogram),
-            send_metric(Pool, free_count, Pool2#pool.free_count, histogram),
-            {Pid, Pool2#pool{
-                    consumer_to_pid = add_member_to_consumer(Pid, CPid, CPMap),
-                    all_members = set_cpid_for_member(Pid, CPid,
-                                                      Pool2#pool.all_members)
-                   }}
+        EverythingElse ->
+            EverythingElse
     end.
 
 %% @doc Add `Count' members to `Pool' asynchronously. Returns updated
