@@ -727,6 +727,45 @@ pooler_integration_long_init_test_() ->
       end
      ]
      }.
+
+sleep_for_configured_timeout() ->
+    SleepTime = case application:get_env(pooler, sleep_time) of
+                    {ok, Val} ->
+                        Val;
+                    _  ->
+                        0
+                end,
+    timer:sleep(SleepTime).    
+
+pooler_integration_queueing_test_() ->
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{name, test_pool_1},
+                       {max_count, 10},
+                       {init_count, 0},
+                       {member_start_timeout, {5, sec}},
+                       {start_mfa,
+                        {pooled_gs, start_link, [{"type-0", fun pooler_tests:sleep_for_configured_timeout/0 }]}}],
+
+             application:set_env(pooler, pools, [Pool]),
+             application:start(pooler)
+     end,
+     % cleanup
+     fun(_) ->
+             application:stop(pooler)
+     end,
+     %
+     [
+      fun(_) ->
+              fun() ->
+                      Val = pooler:take_member_queued(test_pool_1),
+                      ?assert(is_pid(Val)),
+                      pooler:return_member(test_pool_1, Val)
+              end
+      end
+     ]
+     }.
     
 
 pooler_integration_test_() ->

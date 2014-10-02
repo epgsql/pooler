@@ -78,7 +78,10 @@
 
           %% The API used to call the metrics system. It supports both Folsom
           %% and Exometer format.
-          metrics_api = folsom :: 'folsom' | 'exometer'
+          metrics_api = folsom :: 'folsom' | 'exometer',
+
+          %% A queue of requestors for deferred take member requests
+          queued_requestors = queue:new()
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).

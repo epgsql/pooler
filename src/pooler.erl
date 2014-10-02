@@ -40,7 +40,8 @@
          new_pool/1,
          pool_child_spec/1,
          rm_pool/1,
-         rm_group/1]).
+         rm_group/1,
+         take_member_queued/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -178,6 +179,17 @@ accept_member(PoolName, MemberPid) ->
 take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
     gen_server:call(PoolName, take_member, infinity).
 
+%% @doc Obtain exclusive access to a member from 'PoolName'.
+%%
+%% If no free members are available, reply is deferred for up to
+%% 5 seconds. During this window, if accept member is called
+%% the next queued requestor will be given the accepted member.
+%%
+-spec take_member_queued(atom() | pid()) -> pid() | error_no_members.
+take_member_queued(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
+    gen_server:call(PoolName, take_member_queued, infinity).
+
+
 %% @doc Take a member from a randomly selected member of the group
 %% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
 %% members are available in the randomly chosen pool, all other pools
@@ -300,6 +312,15 @@ set_member_sup(#pool{} = Pool, MemberSup) ->
 handle_call(take_member, {CPid, _Tag}, #pool{} = Pool) ->
     {Member, NewPool} = take_member_from_pool(Pool, CPid),
     {reply, Member, NewPool};
+handle_call(take_member_queued, {CPid, _Tag} = From, #pool{} = Pool) ->
+    {Member, NewPool} = take_member_from_pool_queued(Pool, CPid, From),
+    case Member of
+        error_no_members ->
+            {noreply, NewPool};
+        Member ->
+            {reply, Member, NewPool}
+    end;
+    
 handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
 handle_call({accept_member, Pid}, _From, Pool) ->
@@ -365,8 +386,6 @@ code_change(_OldVsn, State, _Extra) ->
 do_accept_member({StarterPid, Pid},
                  #pool{
                     all_members = AllMembers,
-                    free_pids = Free,
-                    free_count = NumFree,
                     starting_members = StartingMembers0,
                     member_start_timeout = StartTimeout
                    } = Pool) when is_pid(Pid) ->
@@ -388,10 +407,7 @@ do_accept_member({StarterPid, Pid},
             Entry = {MRef, free, os:timestamp()},
             AllMembers1 = store_all_members(Pid, Entry, AllMembers),
             pooler_starter:stop(StarterPid),
-            Pool#pool{free_pids = Free ++ [Pid],
-                      free_count = NumFree + 1,
-                      all_members = AllMembers1,
-                      starting_members = StartingMembers1}
+            maybe_reply_with_pid(Pid, Pool1#pool{all_members = AllMembers1, starting_members = StartingMembers1})
     end;
 do_accept_member({StarterPid, _Reason}, #pool{starting_members = StartingMembers0,
                                        member_start_timeout = StartTimeout} = Pool) ->
@@ -402,6 +418,28 @@ do_accept_member({StarterPid, _Reason}, #pool{starting_members = StartingMembers
     StartingMembers1 = lists:keydelete(StarterPid, 1, StartingMembers),
     Pool1#pool{starting_members = StartingMembers1}.
 
+maybe_reply_with_pid(Pid, Pool = #pool{
+                    all_members = AllMembers,
+                    free_pids = Free,
+                    free_count = NumFree,
+                    starting_members = StartingMembers,
+                    queued_requestors = QueuedRequestors}) ->
+    case queue:out(QueuedRequestors) of
+        {empty, NewQueuedRequestors} ->
+            Pool#pool{free_pids = Free ++ [Pid],
+                      free_count = NumFree + 1,
+                      all_members = AllMembers,
+                      starting_members = StartingMembers,
+                      queued_requestors = NewQueuedRequestors};
+        {{value, ReplyPid}, NewQueuedRequestors} ->
+            io:format("Queue not empty ~p!~n", [ReplyPid]),
+            gen_server:reply(ReplyPid, Pid),
+            Pool#pool{free_pids = Free,
+                      free_count = NumFree,
+                      all_members = AllMembers,
+                      starting_members = StartingMembers,
+                      queued_requestors = NewQueuedRequestors}
+    end.
 
 -spec remove_stale_starting_members(#pool{}, [{reference(), erlang:timestamp()}],
                                     time_spec()) -> #pool{}.
@@ -492,6 +530,55 @@ take_member_from_pool(#pool{init_count = InitCount,
             {Pid, Pool2#pool{
                     consumer_to_pid = add_member_to_consumer(Pid, From, CPMap),
                     all_members = set_cpid_for_member(Pid, From,
+                                                      Pool2#pool.all_members)
+                   }}
+    end.
+
+-spec take_member_from_pool_queued(#pool{}, pid(), {pid(), term()}) ->
+                                   {error_no_members | pid(), #pool{}}.
+take_member_from_pool_queued(#pool{init_count = InitCount,
+                            max_count = Max,
+                            free_pids = Free,
+                            in_use_count = NumInUse,
+                            free_count = NumFree,
+                            consumer_to_pid = CPMap,
+                            starting_members = StartingMembers,
+                            member_start_timeout = StartTimeout,
+                            queued_requestors = QueuedRequestors
+                                  } = Pool,
+                      CPid, From) ->
+    send_metric(Pool, take_rate, 1, meter),
+    Pool1 = remove_stale_starting_members(Pool, StartingMembers, StartTimeout),
+    NonStaleStartingMemberCount = length(Pool1#pool.starting_members),
+    NumCanAdd = Max - (NumInUse + NumFree + NonStaleStartingMemberCount),
+    case Free of
+        [] when NumCanAdd =< 0  ->
+            send_metric(Pool, error_no_members_count, {inc, 1}, counter),
+            send_metric(Pool, events, error_no_members, history),
+            io:format("Queueing request ~p~n", [CPid]),
+            {error_no_members, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
+        [] when NumCanAdd > 0 ->
+            %% Limit concurrently starting members to init_count. Add
+            %% up to init_count members. Starting members here means
+            %% we always return an error_no_members for a take request
+            %% when all members are in-use. By adding a batch of new
+            %% members, the pool should reach a steady state with
+            %% unused members culled over time (if scheduled cull is
+            %% enabled).
+            NumToAdd = max(min(InitCount - NonStaleStartingMemberCount, NumCanAdd), 1),
+            Pool2 = add_members_async(NumToAdd, Pool1),
+            send_metric(Pool, error_no_members_count, {inc, 1}, counter),
+            send_metric(Pool, events, error_no_members, history),
+            io:format("Queueing request ~p~n", [From]),
+            {error_no_members, Pool2#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
+        [Pid|Rest] ->
+            Pool2 = Pool1#pool{free_pids = Rest, in_use_count = NumInUse + 1,
+                              free_count = NumFree - 1},
+            send_metric(Pool, in_use_count, Pool2#pool.in_use_count, histogram),
+            send_metric(Pool, free_count, Pool2#pool.free_count, histogram),
+            {Pid, Pool2#pool{
+                    consumer_to_pid = add_member_to_consumer(Pid, CPid, CPMap),
+                    all_members = set_cpid_for_member(Pid, CPid,
                                                       Pool2#pool.all_members)
                    }}
     end.
