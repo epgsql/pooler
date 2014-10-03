@@ -759,7 +759,7 @@ pooler_integration_queueing_test_() ->
      [
       fun(_) ->
               fun() ->
-                      ?assertEqual(0, (gen_server:call(test_pool_1, dump_pool))#pool.free_count),
+                      ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
                       Val = pooler:take_member_queued(test_pool_1),
                       ?assert(is_pid(Val)),
                       pooler:return_member(test_pool_1, Val)
@@ -768,9 +768,21 @@ pooler_integration_queueing_test_() ->
       fun(_) ->
               fun() ->
                       application:set_env(pooler, sleep_time, 1),
-                      ?assertEqual(0, (gen_server:call(test_pool_1, dump_pool))#pool.free_count),
+                      ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
                       Val = pooler:take_member_queued(test_pool_1, 0),
                       ?assertEqual(error_no_members, Val),
+                      timer:sleep(50),
+                      %Next request should be available
+                      Pid = pooler:take_member_queued(test_pool_1, 0),
+                      ?assert(is_pid(Pid)),
+                      pooler:return_member(test_pool_1, Pid)
+              end
+      end,
+      fun(_) ->
+              fun() ->
+                      application:set_env(pooler, sleep_time, 10),
+                      ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
+                      [?assertEqual(pooler:take_member_queued(test_pool_1, 0), error_no_members) || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)],
                       timer:sleep(50),
                       %Next request should be available
                       Pid = pooler:take_member_queued(test_pool_1, 0),
@@ -890,4 +902,7 @@ children_count(SupId) ->
     length(supervisor:which_children(SupId)).
 
 starting_members(PoolName) ->
-    length((gen_server:call(PoolName, dump_pool))#pool.starting_members).
+    length((dump_pool(PoolName))#pool.starting_members).
+
+dump_pool(PoolName) ->
+    gen_server:call(PoolName, dump_pool).
