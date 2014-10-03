@@ -795,13 +795,19 @@ pooler_integration_queueing_test_() ->
               fun() ->
                       % fill to queue_max, next request should return immediately with no_members
                       % Will return a if queue max is not enforced.
-                      application:set_env(pooler, sleep_time, 1000),
-                     [ proc_lib:spawn(fun() -> pooler:take_member_queued(test_pool_1, 1000) end)
+                      application:set_env(pooler, sleep_time, 100),
+                     [ proc_lib:spawn(fun() -> Val = pooler:take_member_queued(test_pool_1, 200),
+                                      ?assert(is_pid(Val)),
+                                      pooler:return_member(Val) end)
                                       || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
                                          ],
                       timer:sleep(50),
                       ?assertEqual(10, queue:len((dump_pool(test_pool_1))#pool.queued_requestors)),
-                      ?assertEqual(pooler:take_member_queued(test_pool_1, 500), error_no_members)
+                      ?assertEqual(pooler:take_member_queued(test_pool_1, 500), error_no_members),
+                      timer:sleep(100),
+                      Val = pooler:take_member_queued(test_pool_1, 500),
+                      ?assert(is_pid(Val)),
+                      pooler:return_member(test_pool_1, Val)
               end
       end
      ]
