@@ -41,7 +41,8 @@
          pool_child_spec/1,
          rm_pool/1,
          rm_group/1,
-         take_member_queued/1]).
+         take_member_queued/1,
+         take_member_queued/2]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -189,6 +190,10 @@ take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
 take_member_queued(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
     gen_server:call(PoolName, take_member_queued, infinity).
 
+-spec take_member_queued(atom() | pid(), non_neg_integer()) -> pid() | error_no_members.
+take_member_queued(PoolName, Timeout) when is_atom(PoolName) orelse is_pid(PoolName) ->
+    gen_server:call(PoolName, {take_member_queued, Timeout}, infinity).
+
 
 %% @doc Take a member from a randomly selected member of the group
 %% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
@@ -312,14 +317,11 @@ set_member_sup(#pool{} = Pool, MemberSup) ->
 handle_call(take_member, {CPid, _Tag}, #pool{} = Pool) ->
     {Member, NewPool} = take_member_from_pool(Pool, CPid),
     {reply, Member, NewPool};
-handle_call(take_member_queued, {CPid, _Tag} = From, #pool{} = Pool) ->
-    {Member, NewPool} = take_member_from_pool_queued(Pool, CPid, From),
-    case Member of
-        error_no_members ->
-            {noreply, NewPool};
-        Member ->
-            {reply, Member, NewPool}
-    end;
+handle_call({take_member_queued, Timeout}, {CPid, _Tag} = From, #pool{} = Pool) ->
+    maybe_reply(take_member_from_pool_queued(Pool, CPid, From, Timeout));
+
+handle_call(take_member_queued, {CPid, _Tag} = From, #pool{queue_timeout = Timeout} = Pool) ->
+    maybe_reply(take_member_from_pool_queued(Pool, CPid, From, Timeout));
     
 handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
@@ -422,6 +424,7 @@ maybe_reply_with_pid(Pid, Pool = #pool{
                     all_members = AllMembers,
                     free_pids = Free,
                     free_count = NumFree,
+                    consumer_to_pid = CPMap,
                     starting_members = StartingMembers,
                     queued_requestors = QueuedRequestors}) ->
     case queue:out(QueuedRequestors) of
@@ -431,14 +434,16 @@ maybe_reply_with_pid(Pid, Pool = #pool{
                       all_members = AllMembers,
                       starting_members = StartingMembers,
                       queued_requestors = NewQueuedRequestors};
-        {{value, ReplyPid}, NewQueuedRequestors} ->
+        {{value, From = {ReplyPid, _Tag}}, NewQueuedRequestors} ->
             io:format("Queue not empty ~p!~n", [ReplyPid]),
-            gen_server:reply(ReplyPid, Pid),
+            gen_server:reply(From, Pid),
             Pool#pool{free_pids = Free,
                       free_count = NumFree,
-                      all_members = AllMembers,
                       starting_members = StartingMembers,
-                      queued_requestors = NewQueuedRequestors}
+                      all_members = set_cpid_for_member(Pid, ReplyPid, Pool#pool.all_members),
+                      queued_requestors = NewQueuedRequestors,
+                      consumer_to_pid = add_member_to_consumer(Pid, ReplyPid, CPMap)
+                     }
     end.
 
 -spec remove_stale_starting_members(#pool{}, [{reference(), erlang:timestamp()}],
@@ -534,9 +539,9 @@ take_member_from_pool(#pool{init_count = InitCount,
                    }}
     end.
 
--spec take_member_from_pool_queued(#pool{}, pid(), {pid(), term()}) ->
+-spec take_member_from_pool_queued(#pool{}, pid(), {pid(), term()}, non_neg_integer()) ->
                                    {error_no_members | pid(), #pool{}}.
-take_member_from_pool_queued(Pool0, CPid, From) ->
+take_member_from_pool_queued(Pool0, CPid, From, _Timeout) ->
     case take_member_from_pool(Pool0, CPid) of
         {error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}} ->
             {error_no_members, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
@@ -800,3 +805,11 @@ time_as_micros({Time, mu}) ->
 
 secs_between({Mega1, Secs1, _}, {Mega2, Secs2, _}) ->
     (Mega2 - Mega1) * 1000000 + (Secs2 - Secs1).
+
+maybe_reply({Member, NewPool}) ->
+    case Member of
+        error_no_members ->
+            {noreply, NewPool};
+        Member ->
+            {reply, Member, NewPool}
+    end.

@@ -81,7 +81,8 @@
           metrics_api = folsom :: 'folsom' | 'exometer',
 
           %% A queue of requestors for deferred take member requests
-          queued_requestors = queue:new()
+          queued_requestors = queue:new(),
+          queue_timeout
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
