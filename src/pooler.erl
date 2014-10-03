@@ -557,13 +557,15 @@ take_member_from_pool(#pool{init_count = InitCount,
 
 -spec take_member_from_pool_queued(#pool{}, pid(), {pid(), term()}, non_neg_integer()) ->
                                    {error_no_members | pid(), #pool{}}.
-take_member_from_pool_queued(Pool0, CPid, From, Timeout) ->
-    case take_member_from_pool(Pool0, CPid) of
-        {error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}} ->
+take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax, queued_requestors = Requestors}, CPid, From, Timeout) ->
+    case {take_member_from_pool(Pool0, CPid), queue:len(Requestors)} of
+        {{error_no_members, Pool1}, QMax} ->
+            {error_no_members, Pool1};
+        {{error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}}, _} ->
             timer:send_after(time_as_millis(Timeout), {requestor_timeout, From}),
-            {error_no_members, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
-        EverythingElse ->
-            EverythingElse
+            {queued, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
+        {{Member, NewPool}, _} when is_pid(Member) ->
+            {Member, NewPool}
     end.
 
 %% @doc Add `Count' members to `Pool' asynchronously. Returns updated
@@ -829,8 +831,10 @@ secs_between({Mega1, Secs1, _}, {Mega2, Secs2, _}) ->
 
 maybe_reply({Member, NewPool}) ->
     case Member of
-        error_no_members ->
+        queued ->
             {noreply, NewPool};
-        Member ->
+        error_no_members ->
+            {reply, error_no_members, NewPool};
+        Member when is_pid(Member) ->
             {reply, Member, NewPool}
     end.
