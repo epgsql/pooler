@@ -178,7 +178,7 @@ accept_member(PoolName, MemberPid) ->
 %%
 -spec take_member(atom() | pid()) -> pid() | error_no_members.
 take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
-    gen_server:call(PoolName, take_member, infinity).
+    gen_server:call(PoolName, {take_member_queued, 0}, infinity).
 
 %% @doc Obtain exclusive access to a member from 'PoolName'.
 %%
@@ -344,7 +344,6 @@ handle_cast(_Msg, Pool) ->
 
 -spec handle_info(_, _) -> {'noreply', _}.
 handle_info({requestor_timeout, From}, Pool = #pool{ queued_requestors = RequestorQueue }) ->
-    io:format("Requestor Timeout From ~p~n", [From]),
     NewQueue = queue:filter(fun(RequestorFrom) ->
                                     case RequestorFrom == From of
                                         true ->
@@ -438,6 +437,7 @@ maybe_reply_with_pid(Pid, Pool = #pool{
                     all_members = AllMembers,
                     free_pids = Free,
                     free_count = NumFree,
+                    in_use_count = NumInUse,
                     consumer_to_pid = CPMap,
                     starting_members = StartingMembers,
                     queued_requestors = QueuedRequestors}) ->
@@ -449,9 +449,12 @@ maybe_reply_with_pid(Pid, Pool = #pool{
                       starting_members = StartingMembers,
                       queued_requestors = NewQueuedRequestors};
         {{value, From = {ReplyPid, _Tag}}, NewQueuedRequestors} ->
-            io:format("Queue not empty ~p!~n", [ReplyPid]),
+            Pool1 = Pool#pool{in_use_count = NumInUse + 1 },
+            send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
+            send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
+
             gen_server:reply(From, Pid),
-            Pool#pool{free_pids = Free,
+            Pool1#pool{free_pids = Free,
                       free_count = NumFree,
                       starting_members = StartingMembers,
                       all_members = set_cpid_for_member(Pid, ReplyPid, Pool#pool.all_members),
@@ -548,8 +551,7 @@ take_member_from_pool(#pool{init_count = InitCount,
             send_metric(Pool, free_count, Pool2#pool.free_count, histogram),
             {Pid, Pool2#pool{
                     consumer_to_pid = add_member_to_consumer(Pid, From, CPMap),
-                    all_members = set_cpid_for_member(Pid, From,
-                                                      Pool2#pool.all_members)
+                    all_members = set_cpid_for_member(Pid, From, Pool2#pool.all_members)
                    }}
     end.
 
@@ -558,7 +560,6 @@ take_member_from_pool(#pool{init_count = InitCount,
 take_member_from_pool_queued(Pool0, CPid, From, Timeout) ->
     case take_member_from_pool(Pool0, CPid) of
         {error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}} ->
-            io:format("Scheduling timeout for From ~p at ~p~n", [From, Timeout]), 
             timer:send_after(Timeout, {requestor_timeout, From}),
             {error_no_members, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
         EverythingElse ->
