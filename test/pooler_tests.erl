@@ -759,9 +759,23 @@ pooler_integration_queueing_test_() ->
      [
       fun(_) ->
               fun() ->
+                      ?assertEqual(0, (gen_server:call(test_pool_1, dump_pool))#pool.free_count),
                       Val = pooler:take_member_queued(test_pool_1),
                       ?assert(is_pid(Val)),
                       pooler:return_member(test_pool_1, Val)
+              end
+      end,
+      fun(_) ->
+              fun() ->
+                      application:set_env(pooler, sleep_time, 1),
+                      ?assertEqual(0, (gen_server:call(test_pool_1, dump_pool))#pool.free_count),
+                      Val = pooler:take_member_queued(test_pool_1, 0),
+                      ?assertEqual(error_no_members, Val),
+                      timer:sleep(50),
+                      %Next request should be available
+                      Pid = pooler:take_member_queued(test_pool_1, 0),
+                      ?assert(is_pid(Pid)),
+                      pooler:return_member(test_pool_1, Pid)
               end
       end
      ]

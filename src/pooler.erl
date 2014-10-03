@@ -314,9 +314,11 @@ init(#pool{}=Pool) ->
 
 set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
+
 handle_call(take_member, {CPid, _Tag}, #pool{} = Pool) ->
     {Member, NewPool} = take_member_from_pool(Pool, CPid),
     {reply, Member, NewPool};
+
 handle_call({take_member_queued, Timeout}, {CPid, _Tag} = From, #pool{} = Pool) ->
     maybe_reply(take_member_from_pool_queued(Pool, CPid, From, Timeout));
 
@@ -341,6 +343,18 @@ handle_cast(_Msg, Pool) ->
     {noreply, Pool}.
 
 -spec handle_info(_, _) -> {'noreply', _}.
+handle_info({requestor_timeout, From}, Pool = #pool{ queued_requestors = RequestorQueue }) ->
+    io:format("Requestor Timeout From ~p~n", [From]),
+    NewQueue = queue:filter(fun(RequestorFrom) ->
+                                    case RequestorFrom == From of
+                                        true ->
+                                            gen_server:reply(RequestorFrom, error_no_members),
+                                            false;
+                                        false ->
+                                            true
+                                    end
+                            end, RequestorQueue),
+    {noreply, Pool#pool{ queued_requestors = NewQueue} };
 handle_info(timeout, #pool{group = undefined} = Pool) ->
     %% ignore
     {noreply, Pool};
@@ -541,9 +555,11 @@ take_member_from_pool(#pool{init_count = InitCount,
 
 -spec take_member_from_pool_queued(#pool{}, pid(), {pid(), term()}, non_neg_integer()) ->
                                    {error_no_members | pid(), #pool{}}.
-take_member_from_pool_queued(Pool0, CPid, From, _Timeout) ->
+take_member_from_pool_queued(Pool0, CPid, From, Timeout) ->
     case take_member_from_pool(Pool0, CPid) of
         {error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}} ->
+            io:format("Scheduling timeout for From ~p at ~p~n", [From, Timeout]), 
+            timer:send_after(Timeout, {requestor_timeout, From}),
             {error_no_members, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
         EverythingElse ->
             EverythingElse
