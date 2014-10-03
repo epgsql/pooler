@@ -82,7 +82,10 @@
 
           %% A queue of requestors for deferred take member requests
           queued_requestors = queue:new(),
-          queue_timeout
+          %% The timeout for a queue member at which point error_no_memers will be replied
+          queue_timeout,
+          %% The max depth of the queue
+          queue_max = 50
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).

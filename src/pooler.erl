@@ -560,7 +560,7 @@ take_member_from_pool(#pool{init_count = InitCount,
 take_member_from_pool_queued(Pool0, CPid, From, Timeout) ->
     case take_member_from_pool(Pool0, CPid) of
         {error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}} ->
-            timer:send_after(Timeout, {requestor_timeout, From}),
+            timer:send_after(time_as_millis(Timeout), {requestor_timeout, From}),
             {error_no_members, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
         EverythingElse ->
             EverythingElse
@@ -807,7 +807,11 @@ time_as_secs({Time, Unit}) ->
 -spec time_as_millis(time_spec()) -> non_neg_integer().
 %% @doc Convert time unit into milliseconds.
 time_as_millis({Time, Unit}) ->
-    time_as_micros({Time, Unit}) div 1000.
+    time_as_micros({Time, Unit}) div 1000;
+%% Allows blind convert
+time_as_millis(Time) when is_integer(Time) ->
+    Time.
+
 
 -spec time_as_micros(time_spec()) -> non_neg_integer().
 %% @doc Convert time unit into microseconds
