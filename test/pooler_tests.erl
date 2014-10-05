@@ -362,7 +362,8 @@ basic_tests() ->
                                         <<"pooler.test_pool_1.in_use_count">>,
                                         <<"pooler.test_pool_1.killed_free_count">>,
                                         <<"pooler.test_pool_1.killed_in_use_count">>,
-                                        <<"pooler.test_pool_1.take_rate">>]),
+                                        <<"pooler.test_pool_1.take_rate">>,
+                                        <<"pooler.test_pool_1.queue_count">>]),
                Metrics = fake_metrics:get_metrics(),
                GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
                ?assertEqual(ExpectKeys, GotKeys)
@@ -745,15 +746,18 @@ pooler_integration_queueing_test_() ->
                        {max_count, 10},
                        {queue_max, 10},
                        {init_count, 0},
+                       {metrics, fake_metrics},
                        {member_start_timeout, {5, sec}},
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0", fun pooler_tests:sleep_for_configured_timeout/0 }]}}],
 
              application:set_env(pooler, pools, [Pool]),
+             fake_metrics:start_link(),
              application:start(pooler)
      end,
      % cleanup
      fun(_) ->
+             fake_metrics:stop(),
              application:stop(pooler)
      end,
      %
@@ -804,6 +808,15 @@ pooler_integration_queueing_test_() ->
                       timer:sleep(50),
                       ?assertEqual(10, queue:len((dump_pool(test_pool_1))#pool.queued_requestors)),
                       ?assertEqual(pooler:take_member(test_pool_1, 500), error_no_members),
+                      ExpectKeys = lists:sort([<<"pooler.test_pool_1.error_no_members_count">>,
+                                        <<"pooler.test_pool_1.events">>,
+                                        <<"pooler.test_pool_1.take_rate">>,
+                                        <<"pooler.test_pool_1.queue_count">>,
+                                        <<"pooler.test_pool_1.queue_max_reached">>]),
+                      Metrics = fake_metrics:get_metrics(),
+                      GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
+                      ?assertEqual(ExpectKeys, GotKeys),
+
                       timer:sleep(100),
                       Val = pooler:take_member(test_pool_1, 500),
                       ?assert(is_pid(Val)),

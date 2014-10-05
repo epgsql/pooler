@@ -553,9 +553,12 @@ take_member_from_pool(#pool{init_count = InitCount,
 take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax, queued_requestors = Requestors}, CPid, From, Timeout) ->
     case {take_member_from_pool(Pool0, CPid), queue:len(Requestors)} of
         {{error_no_members, Pool1}, QMax} ->
+            send_metric(Pool1, events, error_no_members, history),
+            send_metric(Pool1, queue_max_reached, {inc, 1}, counter),
             {error_no_members, Pool1};
-        {{error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}}, _} ->
+        {{error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}}, QueueCount} ->
             timer:send_after(time_as_millis(Timeout), {requestor_timeout, From}),
+            send_metric(Pool1, queue_count, QueueCount, histogram),
             {queued, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
         {{Member, NewPool}, _} when is_pid(Member) ->
             {Member, NewPool}
