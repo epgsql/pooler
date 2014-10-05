@@ -311,10 +311,6 @@ init(#pool{}=Pool) ->
 set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
 
-handle_call(take_member, {CPid, _Tag}, #pool{} = Pool) ->
-    {Member, NewPool} = take_member_from_pool(Pool, CPid),
-    {reply, Member, NewPool};
-
 handle_call({take_member, Timeout}, {CPid, _Tag} = From, #pool{} = Pool) ->
     maybe_reply(take_member_from_pool_queued(Pool, CPid, From, Timeout));
 
