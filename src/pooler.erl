@@ -426,35 +426,50 @@ do_accept_member({StarterPid, _Reason}, #pool{starting_members = StartingMembers
     StartingMembers1 = lists:keydelete(StarterPid, 1, StartingMembers),
     Pool1#pool{starting_members = StartingMembers1}.
 
-maybe_reply_with_pid(Pid, Pool = #pool{
-                    all_members = AllMembers,
-                    free_pids = Free,
-                    free_count = NumFree,
-                    in_use_count = NumInUse,
-                    consumer_to_pid = CPMap,
-                    starting_members = StartingMembers,
-                    queued_requestors = QueuedRequestors}) ->
+maybe_reply_with_pid(Pid, Pool = #pool{queued_requestors = QueuedRequestors}) ->
     case queue:out(QueuedRequestors) of
-        {empty, NewQueuedRequestors} ->
-            Pool#pool{free_pids = Free ++ [Pid],
-                      free_count = NumFree + 1,
-                      all_members = AllMembers,
-                      starting_members = StartingMembers,
-                      queued_requestors = NewQueuedRequestors};
-        {{value, From = {ReplyPid, _Tag}}, NewQueuedRequestors} ->
-            Pool1 = Pool#pool{in_use_count = NumInUse + 1 },
+        {empty, _NewQueuedRequestors} ->
+            accumulate_member(Pid, Pool);
+        {{value, From}, NewQueuedRequestors} ->
+            Pool1 = distribute_member_bookkeeping(From, Pid, NewQueuedRequestors, Pool),
             send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
             send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
-
+            send_metric(Pool, events, error_no_members, history),
             gen_server:reply(From, Pid),
-            Pool1#pool{free_pids = Free,
-                      free_count = NumFree,
-                      starting_members = StartingMembers,
-                      all_members = set_cpid_for_member(Pid, ReplyPid, Pool#pool.all_members),
-                      queued_requestors = NewQueuedRequestors,
-                      consumer_to_pid = add_member_to_consumer(Pid, ReplyPid, CPMap)
-                     }
+            Pool1
     end.
+
+accumulate_member(Pid,
+                  Pool = #pool{
+                            free_pids = Free,
+                            free_count = NumFree
+                           }) ->
+    Pool#pool{free_pids = Free ++ [Pid],
+              free_count = NumFree + 1}.
+
+-spec distribute_member_bookkeeping(pid(), pid()| [pid()], [pid()] | #pool{}, #pool{} | queue()) -> #pool{}.
+distribute_member_bookkeeping(Pid, From, Rest, Pool = #pool{
+                                                         in_use_count = NumInUse,
+                                                         free_count = NumFree,
+                                                         consumer_to_pid = CPMap}) when is_pid(From),
+                                                                                        is_pid(Pid),
+                                                                                        is_list(Rest)->
+    Pool2 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
+                      free_count = NumFree - 1},
+    Pool2#pool{consumer_to_pid = add_member_to_consumer(Pid, From, CPMap),
+               all_members = set_cpid_for_member(Pid, From, Pool2#pool.all_members)};
+distribute_member_bookkeeping({ReplyPid, _Tag},Pid,NewQueuedRequestors,
+                              Pool = #pool{
+                                        in_use_count = NumInUse,
+                                        all_members = AllMembers,
+                                        consumer_to_pid = CPMap
+                                       }) ->
+    Pool#pool{
+      in_use_count = NumInUse + 1,
+      all_members = set_cpid_for_member(Pid, ReplyPid, AllMembers),
+      consumer_to_pid = add_member_to_consumer(Pid, ReplyPid, CPMap),
+      queued_requestors = NewQueuedRequestors
+     }.
 
 -spec remove_stale_starting_members(#pool{}, [{reference(), erlang:timestamp()}],
                                     time_spec()) -> #pool{}.
@@ -511,7 +526,6 @@ take_member_from_pool(#pool{init_count = InitCount,
                             free_pids = Free,
                             in_use_count = NumInUse,
                             free_count = NumFree,
-                            consumer_to_pid = CPMap,
                             starting_members = StartingMembers,
                             member_start_timeout = StartTimeout} = Pool,
                       From) ->
@@ -538,14 +552,10 @@ take_member_from_pool(#pool{init_count = InitCount,
             send_metric(Pool, events, error_no_members, history),
             {error_no_members, Pool2};
         [Pid|Rest] ->
-            Pool2 = Pool1#pool{free_pids = Rest, in_use_count = NumInUse + 1,
-                              free_count = NumFree - 1},
+            Pool2 = distribute_member_bookkeeping(Pid, From, Rest, Pool1),
             send_metric(Pool, in_use_count, Pool2#pool.in_use_count, histogram),
             send_metric(Pool, free_count, Pool2#pool.free_count, histogram),
-            {Pid, Pool2#pool{
-                    consumer_to_pid = add_member_to_consumer(Pid, From, CPMap),
-                    all_members = set_cpid_for_member(Pid, From, Pool2#pool.all_members)
-                   }}
+            {Pid, Pool2}
     end.
 
 -spec take_member_from_pool_queued(#pool{}, pid(), {pid(), term()}, non_neg_integer()) ->
