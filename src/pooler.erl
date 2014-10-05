@@ -311,8 +311,8 @@ init(#pool{}=Pool) ->
 set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
 
-handle_call({take_member, Timeout}, {CPid, _Tag} = From, #pool{} = Pool) ->
-    maybe_reply(take_member_from_pool_queued(Pool, CPid, From, Timeout));
+handle_call({take_member, Timeout}, From = {_,_}, #pool{} = Pool) ->
+    maybe_reply(take_member_from_pool_queued(Pool, From, Timeout));
 
 handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
@@ -422,11 +422,12 @@ do_accept_member({StarterPid, _Reason}, #pool{starting_members = StartingMembers
     StartingMembers1 = lists:keydelete(StarterPid, 1, StartingMembers),
     Pool1#pool{starting_members = StartingMembers1}.
 
+
 maybe_reply_with_pid(Pid, Pool = #pool{queued_requestors = QueuedRequestors}) ->
     case queue:out(QueuedRequestors) of
         {empty, _NewQueuedRequestors} ->
             accumulate_member(Pid, Pool);
-        {{value, From}, NewQueuedRequestors} ->
+        {{value, From = {_,_}}, NewQueuedRequestors} ->
             Pool1 = distribute_member_bookkeeping(From, Pid, NewQueuedRequestors, Pool),
             send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
             send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
@@ -443,7 +444,7 @@ accumulate_member(Pid,
     Pool#pool{free_pids = Free ++ [Pid],
               free_count = NumFree + 1}.
 
--spec distribute_member_bookkeeping(pid(), pid()| [pid()], [pid()] | #pool{}, #pool{} | queue()) -> #pool{}.
+-spec distribute_member_bookkeeping(pid() | {pid(), term()},  pid(), [pid()] | queue(), #pool{}) -> #pool{}.
 distribute_member_bookkeeping(Pid, From, Rest, Pool = #pool{
                                                          in_use_count = NumInUse,
                                                          free_count = NumFree,
@@ -553,10 +554,13 @@ take_member_from_pool(#pool{init_count = InitCount,
             send_metric(Pool, free_count, Pool2#pool.free_count, histogram),
             {Pid, Pool2}
     end.
-
--spec take_member_from_pool_queued(#pool{}, pid(), {pid(), term()}, non_neg_integer()) ->
-                                   {error_no_members | pid(), #pool{}}.
-take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax, queued_requestors = Requestors}, CPid, From, Timeout) ->
+%Correct spec
+%-spec take_member_from_pool_queued(#pool{}, {pid(),term()}, non_neg_integer()) ->
+%                                   {error_no_members | queued | pid(), #pool{}}.
+%Incorrect spec that dialyzer thinks is right
+-spec take_member_from_pool_queued(#pool{}, {{pid(),term()}, any()}, non_neg_integer()) ->
+                                   {error_no_members | queued | pid(), #pool{}}.
+take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax, queued_requestors = Requestors}, From = {CPid, _}, Timeout) ->
     case {take_member_from_pool(Pool0, CPid), queue:len(Requestors)} of
         {{error_no_members, Pool1}, QMax} ->
             send_metric(Pool1, events, error_no_members, history),
@@ -831,6 +835,8 @@ time_as_micros({Time, mu}) ->
 secs_between({Mega1, Secs1, _}, {Mega2, Secs2, _}) ->
     (Mega2 - Mega1) * 1000000 + (Secs2 - Secs1).
 
+-spec maybe_reply({'queued' | 'error_no_members' | pid(), #pool{}}) ->
+                         {noreply, #pool{}} | {reply, 'error_no_members' | pid(), #pool{}}.
 maybe_reply({Member, NewPool}) ->
     case Member of
         queued ->
