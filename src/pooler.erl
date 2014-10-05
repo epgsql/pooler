@@ -30,6 +30,7 @@
 -export([accept_member/2,
          start_link/1,
          take_member/1,
+         take_member/2,
          take_group_member/1,
          return_group_member/2,
          return_group_member/3,
@@ -40,9 +41,8 @@
          new_pool/1,
          pool_child_spec/1,
          rm_pool/1,
-         rm_group/1,
-         take_member_queued/1,
-         take_member_queued/2]).
+         rm_group/1
+        ]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -178,7 +178,7 @@ accept_member(PoolName, MemberPid) ->
 %%
 -spec take_member(atom() | pid()) -> pid() | error_no_members.
 take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
-    gen_server:call(PoolName, {take_member_queued, 0}, infinity).
+    gen_server:call(PoolName, {take_member, 0}, infinity).
 
 %% @doc Obtain exclusive access to a member from 'PoolName'.
 %%
@@ -186,13 +186,9 @@ take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
 %% 5 seconds. During this window, if accept member is called
 %% the next queued requestor will be given the accepted member.
 %%
--spec take_member_queued(atom() | pid()) -> pid() | error_no_members.
-take_member_queued(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
-    gen_server:call(PoolName, take_member_queued, infinity).
-
--spec take_member_queued(atom() | pid(), non_neg_integer()) -> pid() | error_no_members.
-take_member_queued(PoolName, Timeout) when is_atom(PoolName) orelse is_pid(PoolName) ->
-    gen_server:call(PoolName, {take_member_queued, Timeout}, infinity).
+-spec take_member(atom() | pid(), non_neg_integer()) -> pid() | error_no_members.
+take_member(PoolName, Timeout) when is_atom(PoolName) orelse is_pid(PoolName) ->
+    gen_server:call(PoolName, {take_member, Timeout}, infinity).
 
 
 %% @doc Take a member from a randomly selected member of the group
@@ -319,12 +315,9 @@ handle_call(take_member, {CPid, _Tag}, #pool{} = Pool) ->
     {Member, NewPool} = take_member_from_pool(Pool, CPid),
     {reply, Member, NewPool};
 
-handle_call({take_member_queued, Timeout}, {CPid, _Tag} = From, #pool{} = Pool) ->
+handle_call({take_member, Timeout}, {CPid, _Tag} = From, #pool{} = Pool) ->
     maybe_reply(take_member_from_pool_queued(Pool, CPid, From, Timeout));
 
-handle_call(take_member_queued, {CPid, _Tag} = From, #pool{queue_timeout = Timeout} = Pool) ->
-    maybe_reply(take_member_from_pool_queued(Pool, CPid, From, Timeout));
-    
 handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
 handle_call({accept_member, Pid}, _From, Pool) ->

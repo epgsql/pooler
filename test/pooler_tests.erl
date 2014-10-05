@@ -761,7 +761,7 @@ pooler_integration_queueing_test_() ->
       fun(_) ->
               fun() ->
                       ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
-                      Val = pooler:take_member_queued(test_pool_1),
+                      Val = pooler:take_member(test_pool_1, 10),
                       ?assert(is_pid(Val)),
                       pooler:return_member(test_pool_1, Val)
               end
@@ -770,11 +770,11 @@ pooler_integration_queueing_test_() ->
               fun() ->
                       application:set_env(pooler, sleep_time, 1),
                       ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
-                      Val = pooler:take_member_queued(test_pool_1, 0),
+                      Val = pooler:take_member(test_pool_1, 0),
                       ?assertEqual(error_no_members, Val),
                       timer:sleep(50),
                       %Next request should be available
-                      Pid = pooler:take_member_queued(test_pool_1, 0),
+                      Pid = pooler:take_member(test_pool_1, 0),
                       ?assert(is_pid(Pid)),
                       pooler:return_member(test_pool_1, Pid)
               end
@@ -783,10 +783,10 @@ pooler_integration_queueing_test_() ->
               fun() ->
                       application:set_env(pooler, sleep_time, 10),
                       ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
-                      [?assertEqual(pooler:take_member_queued(test_pool_1, 0), error_no_members) || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)],
+                      [?assertEqual(pooler:take_member(test_pool_1, 0), error_no_members) || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)],
                       timer:sleep(50),
                       %Next request should be available
-                      Pid = pooler:take_member_queued(test_pool_1, 0),
+                      Pid = pooler:take_member(test_pool_1, 0),
                       ?assert(is_pid(Pid)),
                       pooler:return_member(test_pool_1, Pid)
               end
@@ -796,16 +796,16 @@ pooler_integration_queueing_test_() ->
                       % fill to queue_max, next request should return immediately with no_members
                       % Will return a if queue max is not enforced.
                       application:set_env(pooler, sleep_time, 100),
-                     [ proc_lib:spawn(fun() -> Val = pooler:take_member_queued(test_pool_1, 200),
+                     [ proc_lib:spawn(fun() -> Val = pooler:take_member(test_pool_1, 200),
                                       ?assert(is_pid(Val)),
                                       pooler:return_member(Val) end)
                                       || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
                                          ],
                       timer:sleep(50),
                       ?assertEqual(10, queue:len((dump_pool(test_pool_1))#pool.queued_requestors)),
-                      ?assertEqual(pooler:take_member_queued(test_pool_1, 500), error_no_members),
+                      ?assertEqual(pooler:take_member(test_pool_1, 500), error_no_members),
                       timer:sleep(100),
-                      Val = pooler:take_member_queued(test_pool_1, 500),
+                      Val = pooler:take_member(test_pool_1, 500),
                       ?assert(is_pid(Val)),
                       pooler:return_member(test_pool_1, Val)
               end
