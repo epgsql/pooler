@@ -22,8 +22,7 @@ list_to_pool(P) ->
        member_start_timeout = ?gv(member_start_timeout, P, ?DEFAULT_MEMBER_START_TIMEOUT),
        metrics_mod       = ?gv(metrics_mod, P, pooler_no_metrics),
        metrics_api       = ?gv(metrics_api, P, folsom),
-       queue_timeout     = ?gv(queue_timeout, P, {2, sec}),
-       queue_max         = ?gv(queue_max, P, 50)}.
+       queue_max         = ?gv(queue_max, P, ?DEFAULT_POOLER_QUEUE_MAX)}.
 
 %% Return `Value' for `Key' in proplist `P' or crashes with an
 %% informative message if no value is found.
