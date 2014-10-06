@@ -82,7 +82,7 @@
           metrics_api = folsom :: 'folsom' | 'exometer',
 
           %% A queue of requestors for deferred take member requests
-          queued_requestors = queue:new(),
+          queued_requestors = queue:new() :: queue:queue({pid(), _}),
           %% The max depth of the queue
           queue_max = 50
          }).

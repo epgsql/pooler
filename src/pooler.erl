@@ -311,7 +311,7 @@ init(#pool{}=Pool) ->
 set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
 
-handle_call({take_member, Timeout}, From = {_,_}, #pool{} = Pool) ->
+handle_call({take_member, Timeout}, From = {APid,_}, #pool{} = Pool) when is_pid(APid) ->
     maybe_reply(take_member_from_pool_queued(Pool, From, Timeout));
 
 handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
@@ -394,7 +394,8 @@ do_accept_member({StarterPid, Pid},
                     member_start_timeout = StartTimeout
                    } = Pool) when is_pid(Pid) ->
     %% make sure we don't accept a timedout member
-    Pool1 = #pool{starting_members = StartingMembers}= remove_stale_starting_members(Pool, StartingMembers0, StartTimeout),
+    Pool1 = #pool{starting_members = StartingMembers} =
+        remove_stale_starting_members(Pool, StartingMembers0, StartTimeout),
     case lists:keymember(StarterPid, 1, StartingMembers) of
         false ->
             %% A starter completed even though we invalidated the pid
@@ -411,24 +412,31 @@ do_accept_member({StarterPid, Pid},
             Entry = {MRef, free, os:timestamp()},
             AllMembers1 = store_all_members(Pid, Entry, AllMembers),
             pooler_starter:stop(StarterPid),
-            maybe_reply_with_pid(Pid, Pool1#pool{all_members = AllMembers1, starting_members = StartingMembers1})
+            maybe_reply_with_pid(Pid, Pool1#pool{all_members = AllMembers1,
+                                                 starting_members = StartingMembers1})
     end;
-do_accept_member({StarterPid, _Reason}, #pool{starting_members = StartingMembers0,
-                                       member_start_timeout = StartTimeout} = Pool) ->
+do_accept_member({StarterPid, _Reason},
+                 #pool{starting_members = StartingMembers0,
+                       member_start_timeout = StartTimeout} = Pool) ->
     %% member start failed, remove in-flight ref and carry on.
     pooler_starter:stop(StarterPid),
-    Pool1 = #pool{starting_members = StartingMembers} = remove_stale_starting_members(Pool, StartingMembers0,
-                                                    StartTimeout),
+    Pool1 = #pool{starting_members = StartingMembers} =
+        remove_stale_starting_members(Pool, StartingMembers0,
+                                      StartTimeout),
     StartingMembers1 = lists:keydelete(StarterPid, 1, StartingMembers),
     Pool1#pool{starting_members = StartingMembers1}.
 
 
-maybe_reply_with_pid(Pid, Pool = #pool{queued_requestors = QueuedRequestors}) ->
+maybe_reply_with_pid(Pid,
+                     Pool = #pool{queued_requestors = QueuedRequestors,
+                                  free_pids = Free,
+                                  free_count = NumFree}) when is_pid(Pid) ->
     case queue:out(QueuedRequestors) of
-        {empty, _NewQueuedRequestors} ->
-            accumulate_member(Pid, Pool);
-        {{value, From = {_,_}}, NewQueuedRequestors} ->
-            Pool1 = distribute_member_bookkeeping(From, Pid, NewQueuedRequestors, Pool),
+        {empty, _} ->
+            Pool#pool{free_pids = [Pid | Free],
+                      free_count = NumFree + 1};
+        {{value, From = {APid, _}}, NewQueuedRequestors} when is_pid(APid) ->
+            Pool1 = take_member_bookkeeping(Pid, From, NewQueuedRequestors, Pool),
             send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
             send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
             send_metric(Pool, events, error_no_members, history),
@@ -436,35 +444,38 @@ maybe_reply_with_pid(Pid, Pool = #pool{queued_requestors = QueuedRequestors}) ->
             Pool1
     end.
 
-accumulate_member(Pid,
-                  Pool = #pool{
-                            free_pids = Free,
-                            free_count = NumFree
-                           }) ->
-    Pool#pool{free_pids = Free ++ [Pid],
-              free_count = NumFree + 1}.
-
--spec distribute_member_bookkeeping(pid() | {pid(), term()},  pid(), [pid()] | queue(), #pool{}) -> #pool{}.
-distribute_member_bookkeeping(Pid, From, Rest, Pool = #pool{
-                                                         in_use_count = NumInUse,
-                                                         free_count = NumFree,
-                                                         consumer_to_pid = CPMap}) when is_pid(From),
-                                                                                        is_pid(Pid),
-                                                                                        is_list(Rest)->
-    Pool2 = Pool#pool{free_pids = Rest, in_use_count = NumInUse + 1,
-                      free_count = NumFree - 1},
-    Pool2#pool{consumer_to_pid = add_member_to_consumer(Pid, From, CPMap),
-               all_members = set_cpid_for_member(Pid, From, Pool2#pool.all_members)};
-distribute_member_bookkeeping({ReplyPid, _Tag},Pid,NewQueuedRequestors,
-                              Pool = #pool{
-                                        in_use_count = NumInUse,
-                                        all_members = AllMembers,
-                                        consumer_to_pid = CPMap
-                                       }) ->
+-spec take_member_bookkeeping(pid(),
+                              {pid(), _},
+                              [pid()] | queue:queue({pid(), _}),
+                              #pool{}) -> #pool{}.
+take_member_bookkeeping(MemberPid,
+                        {CPid, _},
+                        Rest,
+                        Pool = #pool{in_use_count = NumInUse,
+                                     free_count = NumFree,
+                                     consumer_to_pid = CPMap,
+                                     all_members = AllMembers})
+  when is_pid(MemberPid),
+       is_pid(CPid),
+       is_list(Rest) ->
+    Pool#pool{free_pids = Rest,
+              in_use_count = NumInUse + 1,
+              free_count = NumFree - 1,
+              consumer_to_pid = add_member_to_consumer(MemberPid, CPid, CPMap),
+              all_members = set_cpid_for_member(MemberPid, CPid, AllMembers)
+             };
+take_member_bookkeeping(MemberPid,
+                        {ReplyPid, _Tag},
+                        NewQueuedRequestors,
+                        Pool = #pool{
+                                  in_use_count = NumInUse,
+                                  all_members = AllMembers,
+                                  consumer_to_pid = CPMap
+                                 }) ->
     Pool#pool{
       in_use_count = NumInUse + 1,
-      all_members = set_cpid_for_member(Pid, ReplyPid, AllMembers),
-      consumer_to_pid = add_member_to_consumer(Pid, ReplyPid, CPMap),
+      all_members = set_cpid_for_member(MemberPid, ReplyPid, AllMembers),
+      consumer_to_pid = add_member_to_consumer(MemberPid, ReplyPid, CPMap),
       queued_requestors = NewQueuedRequestors
      }.
 
@@ -549,19 +560,21 @@ take_member_from_pool(#pool{init_count = InitCount,
             send_metric(Pool, events, error_no_members, history),
             {error_no_members, Pool2};
         [Pid|Rest] ->
-            Pool2 = distribute_member_bookkeeping(Pid, From, Rest, Pool1),
+            Pool2 = take_member_bookkeeping(Pid, From, Rest, Pool1),
             send_metric(Pool, in_use_count, Pool2#pool.in_use_count, histogram),
             send_metric(Pool, free_count, Pool2#pool.free_count, histogram),
             {Pid, Pool2}
     end.
-%Correct spec
-%-spec take_member_from_pool_queued(#pool{}, {pid(),term()}, non_neg_integer()) ->
-%                                   {error_no_members | queued | pid(), #pool{}}.
-%Incorrect spec that dialyzer thinks is right
--spec take_member_from_pool_queued(#pool{}, {{pid(),term()}, any()}, non_neg_integer()) ->
+
+-spec take_member_from_pool_queued(#pool{},
+                                   {pid(), _},
+                                   non_neg_integer()) ->
                                    {error_no_members | queued | pid(), #pool{}}.
-take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax, queued_requestors = Requestors}, From = {CPid, _}, Timeout) ->
-    case {take_member_from_pool(Pool0, CPid), queue:len(Requestors)} of
+take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax,
+                                           queued_requestors = Requestors},
+                             From = {CPid, _},
+                             Timeout) when is_pid(CPid) ->
+    case {take_member_from_pool(Pool0, From), queue:len(Requestors)} of
         {{error_no_members, Pool1}, QMax} ->
             send_metric(Pool1, events, error_no_members, history),
             send_metric(Pool1, queue_max_reached, {inc, 1}, counter),
@@ -569,7 +582,7 @@ take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax, queued_requestors =
         {{error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}}, QueueCount} ->
             timer:send_after(time_as_millis(Timeout), {requestor_timeout, From}),
             send_metric(Pool1, queue_count, QueueCount, histogram),
-            {queued, Pool1#pool{queued_requestors = queue:in(From,QueuedRequestors)}};
+            {queued, Pool1#pool{queued_requestors = queue:in(From, QueuedRequestors)}};
         {{Member, NewPool}, _} when is_pid(Member) ->
             {Member, NewPool}
     end.
