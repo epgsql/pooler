@@ -362,7 +362,8 @@ basic_tests() ->
                                         <<"pooler.test_pool_1.in_use_count">>,
                                         <<"pooler.test_pool_1.killed_free_count">>,
                                         <<"pooler.test_pool_1.killed_in_use_count">>,
-                                        <<"pooler.test_pool_1.take_rate">>]),
+                                        <<"pooler.test_pool_1.take_rate">>,
+                                        <<"pooler.test_pool_1.queue_count">>]),
                Metrics = fake_metrics:get_metrics(),
                GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
                ?assertEqual(ExpectKeys, GotKeys)
@@ -727,7 +728,113 @@ pooler_integration_long_init_test_() ->
       end
      ]
      }.
-    
+
+sleep_for_configured_timeout() ->
+    SleepTime = case application:get_env(pooler, sleep_time) of
+                    {ok, Val} ->
+                        Val;
+                    _  ->
+                        0
+                end,
+    timer:sleep(SleepTime).    
+
+pooler_integration_queueing_test_() ->
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{name, test_pool_1},
+                     {max_count, 10},
+                     {queue_max, 10},
+                     {init_count, 0},
+                     {metrics, fake_metrics},
+                     {member_start_timeout, {5, sec}},
+                     {start_mfa,
+                      {pooled_gs, start_link, [
+                                               {"type-0",
+                                                fun pooler_tests:sleep_for_configured_timeout/0 }
+                                              ]
+                      }
+                     }
+                    ],
+
+             application:set_env(pooler, pools, [Pool]),
+             fake_metrics:start_link(),
+             application:start(pooler)
+     end,
+     % cleanup
+     fun(_) ->
+             fake_metrics:stop(),
+             application:stop(pooler)
+     end,
+     [
+      fun(_) ->
+              fun() ->
+                      ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
+                      Val = pooler:take_member(test_pool_1, 10),
+                      ?assert(is_pid(Val)),
+                      pooler:return_member(test_pool_1, Val)
+              end
+      end,
+      fun(_) ->
+              fun() ->
+                      application:set_env(pooler, sleep_time, 1),
+                      ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
+                      Val = pooler:take_member(test_pool_1, 0),
+                      ?assertEqual(error_no_members, Val),
+                      timer:sleep(50),
+                      %Next request should be available
+                      Pid = pooler:take_member(test_pool_1, 0),
+                      ?assert(is_pid(Pid)),
+                      pooler:return_member(test_pool_1, Pid)
+              end
+      end,
+      fun(_) ->
+              fun() ->
+                      application:set_env(pooler, sleep_time, 10),
+                      ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
+                      [
+                       ?assertEqual(pooler:take_member(test_pool_1, 0), error_no_members) ||
+                          _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)],
+                      timer:sleep(50),
+                      %Next request should be available
+                      Pid = pooler:take_member(test_pool_1, 0),
+                      ?assert(is_pid(Pid)),
+                      pooler:return_member(test_pool_1, Pid)
+              end
+      end,
+      fun(_) ->
+              fun() ->
+                      % fill to queue_max, next request should return immediately with no_members
+                      % Will return a if queue max is not enforced.
+                      application:set_env(pooler, sleep_time, 100),
+                      [ proc_lib:spawn(fun() ->
+                                               Val = pooler:take_member(test_pool_1, 200),
+                                                ?assert(is_pid(Val)),
+                                                pooler:return_member(Val)
+                                       end)
+                        || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
+                      ],
+                      timer:sleep(50),
+                      ?assertEqual(10, queue:len((dump_pool(test_pool_1))#pool.queued_requestors)),
+                      ?assertEqual(pooler:take_member(test_pool_1, 500), error_no_members),
+                      ExpectKeys = lists:sort([<<"pooler.test_pool_1.error_no_members_count">>,
+                                               <<"pooler.test_pool_1.events">>,
+                                               <<"pooler.test_pool_1.take_rate">>,
+                                               <<"pooler.test_pool_1.queue_count">>,
+                                               <<"pooler.test_pool_1.queue_max_reached">>]),
+                      Metrics = fake_metrics:get_metrics(),
+                      GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
+                      ?assertEqual(ExpectKeys, GotKeys),
+
+                      timer:sleep(100),
+                      Val = pooler:take_member(test_pool_1, 500),
+                      ?assert(is_pid(Val)),
+                      pooler:return_member(test_pool_1, Val)
+              end
+      end
+     ]
+    }.
+
 
 pooler_integration_test_() ->
     {foreach,
@@ -837,4 +944,7 @@ children_count(SupId) ->
     length(supervisor:which_children(SupId)).
 
 starting_members(PoolName) ->
-    length((gen_server:call(PoolName, dump_pool))#pool.starting_members).
+    length((dump_pool(PoolName))#pool.starting_members).
+
+dump_pool(PoolName) ->
+    gen_server:call(PoolName, dump_pool).
