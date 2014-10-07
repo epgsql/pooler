@@ -434,14 +434,18 @@ maybe_reply_with_pid(Pid,
             Pool#pool{free_pids = [Pid | Free],
                       free_count = NumFree + 1};
         {{value, {From = {APid, _}, TRef}}, NewQueuedRequestors} when is_pid(APid) ->
-            timer:cancel(TRef),
-            Pool1 = take_member_bookkeeping(Pid, From, NewQueuedRequestors, Pool),
-            send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
-            send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
-            send_metric(Pool, events, error_no_members, history),
-            gen_server:reply(From, Pid),
-            Pool1
+            reply_to_queued_requestor(TRef, Pid, From, NewQueuedRequestors, Pool)
     end.
+
+reply_to_queued_requestor(TRef, Pid, From = {APid, _}, NewQueuedRequestors, Pool) when is_pid(APid) ->
+    timer:cancel(TRef),
+    Pool1 = take_member_bookkeeping(Pid, From, NewQueuedRequestors, Pool),
+    send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
+    send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
+    send_metric(Pool, events, error_no_members, history),
+    gen_server:reply(From, Pid),
+    Pool1.
+    
 
 -spec take_member_bookkeeping(pid(),
                               {pid(), _},
@@ -597,7 +601,8 @@ add_members_async(Count, #pool{starting_members = StartingMembers} = Pool) ->
 
 -spec do_return_member(pid(), ok | fail, #pool{}) -> #pool{}.
 do_return_member(Pid, ok, #pool{name = PoolName,
-                                all_members = AllMembers} = Pool) ->
+                                all_members = AllMembers,
+                                queued_requestors = QueuedRequestors} = Pool) ->
     clean_group_table(Pid, Pool),
     case dict:find(Pid, AllMembers) of
         {ok, {_, free, _}} ->
@@ -610,9 +615,15 @@ do_return_member(Pid, ok, #pool{name = PoolName,
             Pool1 = Pool#pool{free_pids = [Pid | Free], in_use_count = NumInUse - 1,
                               free_count = NumFree + 1},
             Entry = {MRef, free, os:timestamp()},
-            Pool1#pool{all_members = store_all_members(Pid, Entry, AllMembers),
+            Pool2 = Pool1#pool{all_members = store_all_members(Pid, Entry, AllMembers),
                        consumer_to_pid = cpmap_remove(Pid, CPid,
-                                                      Pool1#pool.consumer_to_pid)};
+                                                      Pool1#pool.consumer_to_pid)},
+            case queue:out(QueuedRequestors) of
+                {empty, _ } ->
+                    Pool2;
+                {{value, {From = {APid, _}, TRef}}, NewQueuedRequestors} when is_pid(APid) ->
+                    reply_to_queued_requestor(TRef, Pid, From, NewQueuedRequestors, Pool2)
+            end;
         error ->
             Pool
     end;

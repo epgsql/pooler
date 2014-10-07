@@ -809,8 +809,8 @@ pooler_integration_queueing_test_() ->
                       application:set_env(pooler, sleep_time, 100),
                       [ proc_lib:spawn(fun() ->
                                                Val = pooler:take_member(test_pool_1, 200),
-                                                ?assert(is_pid(Val)),
-                                                pooler:return_member(Val)
+                                               ?assert(is_pid(Val)),
+                                               pooler:return_member(Val)
                                        end)
                         || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
                       ],
@@ -834,6 +834,66 @@ pooler_integration_queueing_test_() ->
       end
      ]
     }.
+pooler_integration_queueing_return_member_test_() ->
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{name, test_pool_1},
+                     {max_count, 10},
+                     {queue_max, 10},
+                     {init_count, 10},
+                     {metrics, fake_metrics},
+                     {member_start_timeout, {5, sec}},
+                     {start_mfa,
+                      {pooled_gs, start_link, [
+                                               {"type-0",
+                                                fun pooler_tests:sleep_for_configured_timeout/0 }
+                                              ]
+                      }
+                     }
+                    ],
+
+             application:set_env(pooler, pools, [Pool]),
+             fake_metrics:start_link(),
+             application:start(pooler)
+     end,
+     % cleanup
+     fun(_) ->
+             fake_metrics:stop(),
+             application:stop(pooler)
+     end,
+     [
+      fun(_) ->
+              fun() ->
+                      application:set_env(pooler, sleep_time, 0),
+                      Pids = [ proc_lib:spawn_link(fun() ->
+                                               Val = pooler:take_member(test_pool_1, 200),
+                                               ?assert(is_pid(Val)),
+                                               receive
+                                                   _ ->
+                                                       pooler:return_member(test_pool_1, Val)
+                                                   after
+                                                       5000 ->
+                                                           pooler:return_member(test_pool_1, Val)
+                                               end
+                                       end)
+                        || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
+                      ],
+                      timer:sleep(50),
+                      Parent = self(),
+                      proc_lib:spawn_link(fun() ->
+                                             Val = pooler:take_member(test_pool_1, 200),
+                                             Parent ! Val
+                                     end),
+                      [Pid ! return || Pid <- Pids],
+                      receive
+                          Result ->
+                              ?assert(is_pid(Result))
+                      end
+              end
+      end
+      ]
+     }.
 
 
 pooler_integration_test_() ->
