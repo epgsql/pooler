@@ -879,7 +879,7 @@ pooler_integration_queueing_return_member_test_() ->
                                        end)
                         || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
                       ],
-                      timer:sleep(50),
+                      timer:sleep(1),
                       Parent = self(),
                       proc_lib:spawn_link(fun() ->
                                              Val = pooler:take_member(test_pool_1, 200),
@@ -888,8 +888,11 @@ pooler_integration_queueing_return_member_test_() ->
                       [Pid ! return || Pid <- Pids],
                       receive
                           Result ->
-                              ?assert(is_pid(Result))
-                      end
+                              ?assert(is_pid(Result)),
+                              pooler:return_member(test_pool_1, Result)
+                      end,
+                      ?assertEqual((dump_pool(test_pool_1))#pool.max_count, length((dump_pool(test_pool_1))#pool.free_pids)),
+                      ?assertEqual((dump_pool(test_pool_1))#pool.max_count, (dump_pool(test_pool_1))#pool.free_count)
               end
       end
       ]
