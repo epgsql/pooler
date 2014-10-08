@@ -612,15 +612,14 @@ do_return_member(Pid, ok, #pool{name = PoolName,
         {ok, {MRef, CPid, _}} ->
             #pool{free_pids = Free, in_use_count = NumInUse,
                   free_count = NumFree} = Pool,
-            Pool1 = Pool#pool{free_pids = [Pid | Free], in_use_count = NumInUse - 1,
-                              free_count = NumFree + 1},
+            Pool1 = Pool#pool{in_use_count = NumInUse - 1},
             Entry = {MRef, free, os:timestamp()},
             Pool2 = Pool1#pool{all_members = store_all_members(Pid, Entry, AllMembers),
                        consumer_to_pid = cpmap_remove(Pid, CPid,
                                                       Pool1#pool.consumer_to_pid)},
             case queue:out(QueuedRequestors) of
                 {empty, _ } ->
-                    Pool2;
+                    Pool2#pool{free_pids = [Pid | Free], free_count = NumFree + 1};
                 {{value, {From = {APid, _}, TRef}}, NewQueuedRequestors} when is_pid(APid) ->
                     reply_to_queued_requestor(TRef, Pid, From, NewQueuedRequestors, Pool2)
             end;
