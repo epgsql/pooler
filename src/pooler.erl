@@ -438,7 +438,7 @@ maybe_reply_with_pid(Pid,
     end.
 
 reply_to_queued_requestor(TRef, Pid, From = {APid, _}, NewQueuedRequestors, Pool) when is_pid(APid) ->
-    timer:cancel(TRef),
+    erlang:cancel_timer(TRef),
     Pool1 = take_member_bookkeeping(Pid, From, NewQueuedRequestors, Pool),
     send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
     send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
@@ -583,7 +583,7 @@ take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax,
             send_metric(Pool1, queue_max_reached, {inc, 1}, counter),
             {error_no_members, Pool1};
         {{error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}}, QueueCount} ->
-            {ok, TRef} = timer:send_after(Timeout, {requestor_timeout, From}),
+            TRef = erlang:send_after(Timeout, self(), {requestor_timeout, From}),
             send_metric(Pool1, queue_count, QueueCount, histogram),
             {queued, Pool1#pool{queued_requestors = queue:in({From, TRef}, QueuedRequestors)}};
         {{Member, NewPool}, _} when is_pid(Member) ->
