@@ -6,7 +6,6 @@
 -behaviour(gen_server).
 
 -include("pooler.hrl").
--include_lib("eunit/include/eunit.hrl").
 
 %% ------------------------------------------------------------------
 %% API Function Exports
