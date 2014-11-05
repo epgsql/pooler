@@ -67,8 +67,8 @@ start_link(#pool{name = Name} = Pool) ->
     gen_server:start_link({local, Name}, ?MODULE, Pool, []).
 
 manual_start() ->
-    application:start(sasl),
-    application:start(pooler).
+    ok = application:start(sasl),
+    ok = application:start(pooler).
 
 %% @doc Start a new pool described by the proplist `PoolConfig'. The
 %% following keys are required in the proplist:
@@ -437,7 +437,7 @@ maybe_reply_with_pid(Pid,
     end.
 
 reply_to_queued_requestor(TRef, Pid, From = {APid, _}, NewQueuedRequestors, Pool) when is_pid(APid) ->
-    erlang:cancel_timer(TRef),
+    _ = erlang:cancel_timer(TRef),
     Pool1 = take_member_bookkeeping(Pid, From, NewQueuedRequestors, Pool),
     send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
     send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
@@ -795,11 +795,6 @@ send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
                   metrics_api = exometer}, Label, {inc, Value}, counter) ->
     MetricName = pool_metric_exometer(PoolName, Label),
     MetricsMod:update_or_create(MetricName, Value, counter, []),
-    ok;
-send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
-                   metrics_api = exometer}, Label, {dec, Value}, counter) ->
-    MetricName = pool_metric_exometer(PoolName, Label),
-    MetricsMod:update_or_create(MetricName, - Value, counter, []),
     ok;
 % Exometer does not support 'history' type metrics right now.
 send_metric(#pool{name = _PoolName, metrics_mod = _MetricsMod,
