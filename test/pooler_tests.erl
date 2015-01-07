@@ -341,11 +341,39 @@ basic_tests() ->
                ?assertEqual(ok, pooler:rm_pool(dyn_pool_1))
        end},
 
-      {"metrics have been called",
+      {"metrics have been called (no timeout/queue)",
        fun() ->
                %% exercise the API to ensure we have certain keys reported as metrics
                fake_metrics:reset_metrics(),
                Pids = [ pooler:take_member(test_pool_1) || _I <- lists:seq(1, 10) ],
+               [ pooler:return_member(test_pool_1, P) || P <- Pids ],
+               catch pooler:take_member(bad_pool_name),
+               %% kill and unused member
+               exit(hd(Pids), kill),
+               %% kill a used member
+               KillMe = pooler:take_member(test_pool_1),
+               exit(KillMe, kill),
+               %% FIXME: We need to wait for pooler to process the
+               %% exit message. This is ugly, will fix later.
+               timer:sleep(200),                % :(
+               ExpectKeys = lists:sort([<<"pooler.test_pool_1.error_no_members_count">>,
+                                        <<"pooler.test_pool_1.events">>,
+                                        <<"pooler.test_pool_1.free_count">>,
+                                        <<"pooler.test_pool_1.in_use_count">>,
+                                        <<"pooler.test_pool_1.killed_free_count">>,
+                                        <<"pooler.test_pool_1.killed_in_use_count">>,
+                                        <<"pooler.test_pool_1.take_rate">>]),
+               Metrics = fake_metrics:get_metrics(),
+               GotKeys = lists:usort([ Name || {Name, _, _} <- Metrics ]),
+               ?assertEqual(ExpectKeys, GotKeys)
+       end},
+
+      {"metrics have been called (with timeout/queue)",
+       fun() ->
+               %% exercise the API to ensure we have certain keys reported as metrics
+               fake_metrics:reset_metrics(),
+               %% pass a non-zero timeout here to exercise queueing
+               Pids = [ pooler:take_member(test_pool_1, 1) || _I <- lists:seq(1, 10) ],
                [ pooler:return_member(test_pool_1, P) || P <- Pids ],
                catch pooler:take_member(bad_pool_name),
                %% kill and unused member
