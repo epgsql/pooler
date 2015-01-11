@@ -582,6 +582,8 @@ take_member_from_pool_queued(Pool0 = #pool{queue_max = QMax,
             send_metric(Pool1, events, error_no_members, history),
             send_metric(Pool1, queue_max_reached, {inc, 1}, counter),
             {error_no_members, Pool1};
+        {{error_no_members, Pool1}, _} when Timeout =:= 0 ->
+            {error_no_members, Pool1};
         {{error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}}, QueueCount} ->
             TRef = erlang:send_after(Timeout, self(), {requestor_timeout, From}),
             send_metric(Pool1, queue_count, QueueCount, histogram),
