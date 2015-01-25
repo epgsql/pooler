@@ -2,6 +2,7 @@
 -define(DEFAULT_CULL_INTERVAL, {1, min}).
 -define(DEFAULT_MAX_AGE, {30, sec}).
 -define(DEFAULT_MEMBER_START_TIMEOUT, {1, min}).
+-define(DEFAULT_AUTO_GROW_THRESHOLD, undefined).
 -define(POOLER_GROUP_TABLE, pooler_group_table).
 -define(DEFAULT_POOLER_QUEUE_MAX, 50).
 
@@ -72,6 +73,12 @@
 
           %% The maximum amount of time to allow for member start.
           member_start_timeout = ?DEFAULT_MEMBER_START_TIMEOUT :: time_spec(),
+
+          %% The optional threshold at which more members will be started if
+          %% free_count drops to this value.  Normally undefined, but may be
+          %% set to a non-negative integer in order to enable "anticipatory"
+          %% behavior (start members before they're actually needed).
+          auto_grow_threshold = ?DEFAULT_AUTO_GROW_THRESHOLD :: undefined | non_neg_integer(),
 
           %% The module to use for collecting metrics. If set to
           %% 'pooler_no_metrics', then metric sending calls do
