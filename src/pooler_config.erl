@@ -20,6 +20,7 @@ list_to_pool(P) ->
        cull_interval     = ?gv(cull_interval, P, ?DEFAULT_CULL_INTERVAL),
        max_age           = ?gv(max_age, P, ?DEFAULT_MAX_AGE),
        member_start_timeout = ?gv(member_start_timeout, P, ?DEFAULT_MEMBER_START_TIMEOUT),
+       auto_grow_threshold = ?gv(auto_grow_threshold, P, ?DEFAULT_AUTO_GROW_THRESHOLD),
        metrics_mod       = ?gv(metrics_mod, P, pooler_no_metrics),
        metrics_api       = ?gv(metrics_api, P, folsom),
        queue_max         = ?gv(queue_max, P, ?DEFAULT_POOLER_QUEUE_MAX)}.

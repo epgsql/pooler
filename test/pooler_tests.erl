@@ -985,6 +985,81 @@ pooler_integration_test_() ->
      ]
     }.
 
+pooler_auto_grow_disabled_by_default_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{name, test_pool_1},
+                     {max_count, 5},
+                     {init_count, 2},
+                     {start_mfa,
+                      {pooled_gs, start_link, [{"type-0"}]}}],
+             application:unset_env(pooler, pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(pooler),
+             pooler:new_pool(Pool)
+     end,
+     fun(_X) ->
+             application:stop(pooler)
+     end,
+     [
+      {"take one, and it should not auto-grow",
+       fun() ->
+               ?assertEqual(2, (dump_pool(test_pool_1))#pool.free_count),
+               P = pooler:take_member(test_pool_1),
+               ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
+               timer:sleep(100),
+               ?assertEqual(1, (dump_pool(test_pool_1))#pool.free_count),
+               ok, pooler:return_member(test_pool_1, P)
+       end}
+     ]}}.
+
+pooler_auto_grow_enabled_test_() ->
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
+    {foreach,
+     % setup
+     fun() ->
+             Pool = [{name, test_pool_1},
+                     {max_count, 5},
+                     {init_count, 2},
+                     {auto_grow_threshold, 1},
+                     {start_mfa,
+                      {pooled_gs, start_link, [{"type-0"}]}}],
+             application:unset_env(pooler, pools),
+             error_logger:delete_report_handler(error_logger_tty_h),
+             application:start(pooler),
+             pooler:new_pool(Pool)
+     end,
+     fun(_X) ->
+             application:stop(pooler)
+     end,
+     [
+      {"take one, and it should grow by 2",
+       fun() ->
+               ?assertEqual(2, (dump_pool(test_pool_1))#pool.free_count),
+               P = pooler:take_member(test_pool_1),
+               ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
+               timer:sleep(100),
+               ?assertEqual(3, (dump_pool(test_pool_1))#pool.free_count),
+               ok, pooler:return_member(test_pool_1, P)
+       end}
+     ]}}.
+
 time_as_millis_test_() ->
     Zeros = [ {{0, U}, 0} || U <- [min, sec, ms, mu] ],
     Ones = [{{1, min}, 60000},

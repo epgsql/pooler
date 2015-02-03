@@ -564,9 +564,18 @@ take_member_from_pool(#pool{init_count = InitCount,
             {error_no_members, Pool2};
         [Pid|Rest] ->
             Pool2 = take_member_bookkeeping(Pid, From, Rest, Pool1),
-            send_metric(Pool, in_use_count, Pool2#pool.in_use_count, histogram),
-            send_metric(Pool, free_count, Pool2#pool.free_count, histogram),
-            {Pid, Pool2}
+            Pool3 = case Pool2#pool.auto_grow_threshold of
+                        N when is_integer(N) andalso
+                               Pool2#pool.free_count =< N andalso
+                               NumCanAdd > 0 ->
+                            NumToAdd = max(min(InitCount - NonStaleStartingMemberCount, NumCanAdd), 0),
+                            add_members_async(NumToAdd, Pool2);
+                        _ ->
+                            Pool2
+                    end,
+            send_metric(Pool, in_use_count, Pool3#pool.in_use_count, histogram),
+            send_metric(Pool, free_count, Pool3#pool.free_count, histogram),
+            {Pid, Pool3}
     end.
 
 -spec take_member_from_pool_queued(#pool{},
