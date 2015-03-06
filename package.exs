@@ -4,7 +4,7 @@ defmodule Pooler.Mixfile do
   @version File.read!("VERSION") |> String.strip
 
   def project do
-    [app: :poolboy,
+    [app: :pooler,
      version: @version,
      description: "An OTP Process Pool Application",
      package: package]
