@@ -689,7 +689,8 @@ cpmap_remove(Pid, CPid, CPMap) ->
 remove_pid(Pid, Pool) ->
     #pool{name = PoolName,
           all_members = AllMembers,
-          consumer_to_pid = CPMap} = Pool,
+          consumer_to_pid = CPMap,
+          stop_mfa = StopMFA} = Pool,
     case dict:find(Pid, AllMembers) of
         {ok, {MRef, free, _Time}} ->
             % remove an unused member
@@ -697,7 +698,7 @@ remove_pid(Pid, Pool) ->
             FreePids = lists:delete(Pid, Pool#pool.free_pids),
             NumFree = Pool#pool.free_count - 1,
             Pool1 = Pool#pool{free_pids = FreePids, free_count = NumFree},
-            exit(Pid, kill),
+            terminate_pid(Pid, StopMFA),
             send_metric(Pool1, killed_free_count, {inc, 1}, counter),
             Pool1#pool{all_members = dict:erase(Pid, AllMembers)};
         {ok, {MRef, CPid, _Time}} ->
@@ -705,7 +706,7 @@ remove_pid(Pid, Pool) ->
             %% the consumer.
             erlang:demonitor(MRef, [flush]),
             Pool1 = Pool#pool{in_use_count = Pool#pool.in_use_count - 1},
-            exit(Pid, kill),
+            terminate_pid(Pid, StopMFA),
             send_metric(Pool1, killed_in_use_count, {inc, 1}, counter),
             Pool1#pool{consumer_to_pid = cpmap_remove(Pid, CPid, CPMap),
                        all_members = dict:erase(Pid, AllMembers)};
@@ -879,3 +880,23 @@ maybe_reply({Member, NewPool}) ->
         Member when is_pid(Member) ->
             {reply, Member, NewPool}
     end.
+
+%% Implementation of a best-effort termination for a pool member:
+%% Terminates the pid's pool member given a MFA that gets applied. The list
+%% of arguments must contain the fixed atom ?POOLER_PID, which is replaced
+%% by the target pid. Failure to provide a valid MFA will lead to use the
+%% default callback, i.e `erlang:exit(Pid, kill)`.
+-spec terminate_pid(pid(), {atom(), atom(), [term()]}) -> ok.
+terminate_pid(Pid, {Mod, Fun, Args}) when is_list(Args) ->
+    NewArgs = [case Arg of
+                   ?POOLER_PID -> Pid;
+                   _ -> Arg
+               end || Arg <- Args],
+    case catch erlang:apply(Mod, Fun, NewArgs) of
+        {'EXIT', _} ->
+            terminate_pid(Pid, ?DEFAULT_STOP_MFA);
+        _Result ->
+            ok
+    end;
+terminate_pid(Pid, _) ->
+    terminate_pid(Pid, ?DEFAULT_STOP_MFA).
