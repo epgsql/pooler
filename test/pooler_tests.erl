@@ -1060,6 +1060,50 @@ pooler_auto_grow_enabled_test_() ->
        end}
      ]}}.
 
+pooler_custom_stop_mfa_test_() ->
+    {foreach,
+     fun() ->
+             Pool = [{name, test_pool_1},
+                     {max_count, 3},
+                     {init_count, 2},
+                     {cull_interval, {200, ms}},
+                     {max_age, {0, min}},
+                     {start_mfa, {pooled_gs, start_link, [{foo_type}]}}],
+             application:set_env(pooler, pools, [Pool])
+     end,
+     fun(_) ->
+             application:unset_env(pooler, pools)
+     end,
+     [
+      {"default behavior kills the pool member",
+       fun() ->
+               ok = application:start(pooler),
+               Reason = monitor_members_trigger_culling_and_return_reason(),
+               ok = application:stop(pooler),
+               ?assertEqual(killed, Reason)
+       end},
+      {"custom callback terminates the pool member normally",
+       fun() ->
+               {ok, [Pool]} = application:get_env(pooler, pools),
+               Stop = {stop_mfa, {pooled_gs, stop, ['$pooler_pid']}},
+               application:set_env(pooler, pools, [[Stop | Pool]]),
+               ok = application:start(pooler),
+               Reason = monitor_members_trigger_culling_and_return_reason(),
+               ok = application:stop(pooler),
+               ?assertEqual(normal, Reason)
+       end}]}.
+
+monitor_members_trigger_culling_and_return_reason() ->
+    Pids = get_n_pids(test_pool_1, 3, []),
+    [ erlang:monitor(process, P) || P <- Pids ],
+    [ pooler:return_member(test_pool_1, P) || P <- Pids ],
+    receive
+        {'DOWN', _Ref, process, _Pid, Reason} ->
+            Reason
+    after
+        250 -> timeout
+    end.
+
 time_as_millis_test_() ->
     Zeros = [ {{0, U}, 0} || U <- [min, sec, ms, mu] ],
     Ones = [{{1, min}, 60000},

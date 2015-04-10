@@ -5,6 +5,8 @@
 -define(DEFAULT_AUTO_GROW_THRESHOLD, undefined).
 -define(POOLER_GROUP_TABLE, pooler_group_table).
 -define(DEFAULT_POOLER_QUEUE_MAX, 50).
+-define(POOLER_PID, '$pooler_pid').
+-define(DEFAULT_STOP_MFA, {erlang, exit, [?POOLER_PID, kill]}).
 
 -type member_info() :: {string(), free | pid(), {_, _, _}}.
 -type free_member_info() :: {string(), free, {_, _, _}}.
@@ -79,6 +81,10 @@
           %% set to a non-negative integer in order to enable "anticipatory"
           %% behavior (start members before they're actually needed).
           auto_grow_threshold = ?DEFAULT_AUTO_GROW_THRESHOLD :: undefined | non_neg_integer(),
+
+          %% Stop callback to gracefully attempt to terminate pool members.
+          %% The list of arguments must contain the fixed atom '$pooler_pid'.
+          stop_mfa = ?DEFAULT_STOP_MFA :: {atom(), atom(), [term()]},
 
           %% The module to use for collecting metrics. If set to
           %% 'pooler_no_metrics', then metric sending calls do
