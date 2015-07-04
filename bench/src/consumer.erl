@@ -47,7 +47,7 @@ run(S, Config) ->
          }).
 
 init([]) ->
-    Now = erlang:now(),
+    Now = os:timestamp(),
     random:seed(Now),
     {ok, #state{id = Now}}.
 

@@ -62,7 +62,7 @@ init(Config) ->
 start_up_delay(Config) ->
     case proplists:get_value(start_up_delay, Config) of
         T when is_integer(T) ->
-            random:seed(erlang:now()),
+            random:seed(os:timestamp()),
             J = random:uniform(T),
             timer:sleep(T + J),
             ok;

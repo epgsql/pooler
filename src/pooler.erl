@@ -206,7 +206,7 @@ take_group_member(GroupName) ->
         Pools ->
             %% Put a random member at the front of the list and then
             %% return the first member you can walking the list.
-            {_, _, X} = erlang:now(),
+            {_, _, X} = os:timestamp(),
             Idx = (X rem length(Pools)) + 1,
             {PoolPid, Rest} = extract_nth(Idx, Pools),
             take_first_pool([PoolPid | Rest])
