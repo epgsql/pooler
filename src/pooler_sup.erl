@@ -26,7 +26,6 @@ init([]) ->
                      {metrics_api, MetricsApi}],
     Pools = [ pooler_config:list_to_pool(MetricsConfig ++ L) || L <- Config ],
     PoolSupSpecs = [ pool_sup_spec(Pool) || Pool <- Pools ],
-    ets:new(?POOLER_GROUP_TABLE, [set, public, named_table, {write_concurrency, true}]),
     {ok, {{one_for_one, 5, 60}, [starter_sup_spec() | PoolSupSpecs]}}.
 
 %% @doc Create a new pool from proplist pool config `PoolConfig'. The

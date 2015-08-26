@@ -12,7 +12,6 @@
 list_to_pool(P) ->
     #pool{
        name              = req(name, P),
-       group             = ?gv(group, P),
        max_count         = req(max_count, P),
        init_count        = req(init_count, P),
        start_mfa         = req(start_mfa, P),

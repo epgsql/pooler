@@ -31,17 +31,13 @@
          start_link/1,
          take_member/1,
          take_member/2,
-         take_group_member/1,
-         return_group_member/2,
-         return_group_member/3,
          return_member/2,
          return_member/3,
          pool_stats/1,
          manual_start/0,
          new_pool/1,
          pool_child_spec/1,
-         rm_pool/1,
-         rm_group/1
+         rm_pool/1
         ]).
 
 %% ------------------------------------------------------------------
@@ -91,10 +87,6 @@ manual_start() ->
 %% configuration options:
 %%
 %% <dl>
-%% <dt>`group'</dt>
-%% <dd>An atom giving the name of the group this pool belongs
-%% to. Pools sharing a common `group' value can be accessed using
-%% {@link take_group_member/1} and {@link return_group_member/2}.</dd>
 %% <dt>`cull_interval'</dt>
 %% <dd>Time between checks for stale pool members. Specified as
 %% `{Time, Unit}' where `Time' is a non-negative integer and `Unit' is
@@ -122,43 +114,6 @@ new_pool(PoolConfig) ->
 %% @doc Terminate the named pool.
 rm_pool(PoolName) ->
     pooler_sup:rm_pool(PoolName).
-
-%% @doc Terminates the group and all pools in that group.
-%%
-%% If termination of any member pool fails, `rm_group/1` returns
-%% `{error, {failed_delete_pools, Pools}}`, where `Pools` is a list
-%% of pools that failed to terminate.
-%%
-%% The group is NOT terminated if any member pool did not
-%% successfully terminate.
-%%
--spec rm_group(atom()) -> ok | {error, {failed_rm_pools, [atom()]}}.
-rm_group(GroupName) ->
-    case pg2:get_local_members(GroupName) of
-        {error, {no_such_group, GroupName}} ->
-            ok;
-        Pools ->
-            case rm_group_members(Pools) of
-                [] ->
-                    pg2:delete(GroupName);
-                Failures ->
-                    {error, {failed_rm_pools, Failures}}
-            end
-    end.
-
--spec rm_group_members([pid()]) -> [atom()].
-rm_group_members(MemberPids) ->
-    lists:foldl(
-      fun(MemberPid, Acc) ->
-              Pool = gen_server:call(MemberPid, dump_pool),
-              PoolName = Pool#pool.name,
-              case pooler_sup:rm_pool(PoolName) of
-                  ok -> Acc;
-                  _  -> [PoolName | Acc]
-              end
-      end,
-      [],
-      MemberPids).
 
 %% @doc Get child spec described by the proplist `PoolConfig'.
 %%
@@ -190,72 +145,6 @@ take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
 -spec take_member(atom() | pid(), non_neg_integer() | time_spec()) -> pid() | error_no_members.
 take_member(PoolName, Timeout) when is_atom(PoolName) orelse is_pid(PoolName) ->
     gen_server:call(PoolName, {take_member, time_as_millis(Timeout)}, infinity).
-
-
-%% @doc Take a member from a randomly selected member of the group
-%% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
-%% members are available in the randomly chosen pool, all other pools
-%% in the group are tried in order.
--spec take_group_member(atom()) -> pid() | error_no_members | {error_no_group, atom()}.
-take_group_member(GroupName) ->
-    case pg2:get_local_members(GroupName) of
-        {error, {no_such_group, GroupName}} ->
-            {error_no_group, GroupName};
-        [] ->
-            error_no_members;
-        Pools ->
-            %% Put a random member at the front of the list and then
-            %% return the first member you can walking the list.
-            {_, _, X} = erlang:now(),
-            Idx = (X rem length(Pools)) + 1,
-            {PoolPid, Rest} = extract_nth(Idx, Pools),
-            take_first_pool([PoolPid | Rest])
-    end.
-
-take_first_pool([PoolPid | Rest]) ->
-    case take_member(PoolPid) of
-        error_no_members ->
-            take_first_pool(Rest);
-        Member ->
-            ets:insert(?POOLER_GROUP_TABLE, {Member, PoolPid}),
-            Member
-    end;
-take_first_pool([]) ->
-    error_no_members.
-
-%% this helper function returns `{Nth_Elt, Rest}' where `Nth_Elt' is
-%% the nth element of `L' and `Rest' is `L -- [Nth_Elt]'.
-extract_nth(N, L) ->
-    extract_nth(N, L, []).
-
-extract_nth(1, [H | T], Acc) ->
-    {H, Acc ++ T};
-extract_nth(N, [H | T], Acc) ->
-    extract_nth(N - 1, T, [H | Acc]);
-extract_nth(_, [], _) ->
-    error(badarg).
-
-%% @doc Return a member that was taken from the group
-%% `GroupName'. This is a convenience function for
-%% `return_group_member/3' with `Status' of `ok'.
--spec return_group_member(atom(), pid() | error_no_members) -> ok.
-return_group_member(GroupName, MemberPid) ->
-    return_group_member(GroupName, MemberPid, ok).
-
-%% @doc Return a member that was taken from the group `GroupName'. If
-%% `Status' is `ok' the member is returned to the pool from which is
-%% came. If `Status' is `fail' the member will be terminated and a new
-%% member added to the appropriate pool.
--spec return_group_member(atom(), pid() | error_no_members, ok | fail) -> ok.
-return_group_member(_, error_no_members, _) ->
-    ok;
-return_group_member(_GroupName, MemberPid, Status) ->
-    case ets:lookup(?POOLER_GROUP_TABLE, MemberPid) of
-        [{MemberPid, PoolPid}] ->
-            return_member(PoolPid, MemberPid, Status);
-        [] ->
-            ok
-    end.
 
 %% @doc Return a member to the pool so it can be reused.
 %%
@@ -294,7 +183,7 @@ pool_stats(PoolName) ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 
--spec init(#pool{}) -> {'ok', #pool{}, 0}.
+-spec init(#pool{}) -> {'ok', #pool{}}.
 init(#pool{}=Pool) ->
     #pool{init_count = N} = Pool,
     MemberSup = pooler_pool_sup:member_sup_name(Pool),
@@ -302,12 +191,7 @@ init(#pool{}=Pool) ->
     %% This schedules the next cull when the pool is configured for
     %% such and is otherwise a no-op.
     Pool2 = cull_members_from_pool(Pool1),
-    {ok, NewPool} = init_members_sync(N, Pool2),
-    %% trigger an immediate timeout, handled by handle_info to allow
-    %% us to register with pg2. We use the timeout mechanism to ensure
-    %% that a server is added to a group only when it is ready to
-    %% process messages.
-    {ok, NewPool, 0}.
+    init_members_sync(N, Pool2).
 
 set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
@@ -341,12 +225,8 @@ handle_info({requestor_timeout, From}, Pool = #pool{ queued_requestors = Request
                                     true
                             end, RequestorQueue),
     {noreply, Pool#pool{ queued_requestors = NewQueue} };
-handle_info(timeout, #pool{group = undefined} = Pool) ->
+handle_info(timeout, #pool{} = Pool) ->
     %% ignore
-    {noreply, Pool};
-handle_info(timeout, #pool{group = Group} = Pool) ->
-    ok = pg2:create(Group),
-    ok = pg2:join(Group, self()),
     {noreply, Pool};
 handle_info({'DOWN', MRef, process, Pid, Reason}, State) ->
     State1 =
@@ -614,7 +494,6 @@ add_members_async(Count, #pool{starting_members = StartingMembers} = Pool) ->
 do_return_member(Pid, ok, #pool{name = PoolName,
                                 all_members = AllMembers,
                                 queued_requestors = QueuedRequestors} = Pool) ->
-    clean_group_table(Pid, Pool),
     case dict:find(Pid, AllMembers) of
         {ok, {_, free, _}} ->
             Fmt = "pool '~s': ignored return of free member ~p",
@@ -640,7 +519,6 @@ do_return_member(Pid, ok, #pool{name = PoolName,
 do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
     % for the fail case, perhaps the member crashed and was alerady
     % removed, so use find instead of fetch and ignore missing.
-    clean_group_table(Pid, Pool),
     case dict:find(Pid, AllMembers) of
         {ok, {_MRef, _, _}} ->
             Pool1 = remove_pid(Pid, Pool),
@@ -648,11 +526,6 @@ do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
         error ->
             Pool
     end.
-
-clean_group_table(_MemberPid, #pool{group = undefined}) ->
-    ok;
-clean_group_table(MemberPid, #pool{group = _GroupName}) ->
-    ets:delete(?POOLER_GROUP_TABLE, MemberPid).
 
 % @doc Remove `Pid' from the pid list associated with `CPid' in the
 % consumer to member map given by `CPMap'.

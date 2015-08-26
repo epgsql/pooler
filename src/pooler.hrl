@@ -3,7 +3,6 @@
 -define(DEFAULT_MAX_AGE, {30, sec}).
 -define(DEFAULT_MEMBER_START_TIMEOUT, {1, min}).
 -define(DEFAULT_AUTO_GROW_THRESHOLD, undefined).
--define(POOLER_GROUP_TABLE, pooler_group_table).
 -define(DEFAULT_POOLER_QUEUE_MAX, 50).
 -define(POOLER_PID, '$pooler_pid').
 -define(DEFAULT_STOP_MFA, {erlang, exit, [?POOLER_PID, kill]}).
@@ -23,7 +22,6 @@
 
 -record(pool, {
           name             :: atom(),
-          group            :: atom(),
           max_count = 100  :: non_neg_integer(),
           init_count = 10  :: non_neg_integer(),
           start_mfa        :: {atom(), atom(), [term()]},
