@@ -1,12 +1,10 @@
 {application, pooler,
- [
-  {description, ""},
-  {vsn, git},
-  {registered, []},
-  {applications, [
-                  kernel,
-                  stdlib
-                 ]},
-  {mod, { pooler_app, []}},
-  {env, []}
- ]}.
+	[ {description, "Pools manager"}
+	, {vsn, "1.3.4"}
+	, {id, "git"}
+	, {registered, []}
+	, {modules, []}
+	, {applications, [kernel, stdlib]}
+	, {mod, { pooler_app, []}}
+	, {env, []}
+	]}.

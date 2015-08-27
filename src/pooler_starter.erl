@@ -6,7 +6,6 @@
 -behaviour(gen_server).
 
 -include("pooler.hrl").
--include_lib("eunit/include/eunit.hrl").
 
 %% ------------------------------------------------------------------
 %% API Function Exports
@@ -100,7 +99,7 @@ handle_call(_Request, _From, State) ->
 handle_cast(stop_member, #starter{msg = {_Me, Pid}, pool = #pool{member_sup = MemberSup}} = State) ->
     %% The process we were starting is no longer valid for the pool.
     %% Cleanup the process and stop normally.
-    supervisor:terminate_child(MemberSup, Pid),
+    _ = supervisor:terminate_child(MemberSup, Pid),
     {stop, normal, State};
 
 handle_cast(accept_member, #starter{msg = Msg, parent = Parent, pool = #pool{name = PoolName}} = State) ->
