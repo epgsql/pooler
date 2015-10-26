@@ -249,7 +249,7 @@ return_group_member(GroupName, MemberPid) ->
 -spec return_group_member(atom(), pid() | error_no_members, ok | fail) -> ok.
 return_group_member(_, error_no_members, _) ->
     ok;
-return_group_member(_GroupName, MemberPid, Status) ->
+return_group_member(_GroupName, MemberPid, Status) when is_pid(MemberPid) ->
     case ets:lookup(?POOLER_GROUP_TABLE, MemberPid) of
         [{MemberPid, PoolPid}] ->
             return_member(PoolPid, MemberPid, Status);

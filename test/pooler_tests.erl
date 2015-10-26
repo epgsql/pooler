@@ -481,6 +481,11 @@ pooler_groups_test_() ->
                ?assertEqual(ok, pooler:return_group_member(group_1, Pid))
        end},
 
+      {"return member with something which is not a pid",
+       fun() ->
+               ?assertException(error, _, pooler:return_group_member(group_1, not_pid))
+       end},
+
       {"take member from empty group",
        fun() ->
                %% artificially empty group member list
