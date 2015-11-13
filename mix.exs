@@ -11,7 +11,7 @@ defmodule Pooler.Mixfile do
   end
 
   defp package do
-    [files: ~w(bench doc src test concrete.mk cover.spec demo.config LICENSE Makefile mix.exs mix.lock NEWS.org pooler-example.config README.org rebar.config rebar.config.script VERSION),
+    [files: ~w(bench doc src test concrete.mk cover.spec demo.config LICENSE Makefile NEWS.org pooler-example.config README.org rebar.config rebar.config.script VERSION),
      maintainers: ["Seth Falcon"],
      licenses: ["Apache 2.0"],
      links: %{"GitHub" => "https://github.com/seth/pooler"}]
