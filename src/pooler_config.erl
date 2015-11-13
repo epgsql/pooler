@@ -21,6 +21,7 @@ list_to_pool(P) ->
        max_age           = ?gv(max_age, P, ?DEFAULT_MAX_AGE),
        member_start_timeout = ?gv(member_start_timeout, P, ?DEFAULT_MEMBER_START_TIMEOUT),
        auto_grow_threshold = ?gv(auto_grow_threshold, P, ?DEFAULT_AUTO_GROW_THRESHOLD),
+       stop_mfa          = ?gv(stop_mfa, P, ?DEFAULT_STOP_MFA),
        metrics_mod       = ?gv(metrics_mod, P, pooler_no_metrics),
        metrics_api       = ?gv(metrics_api, P, folsom),
        queue_max         = ?gv(queue_max, P, ?DEFAULT_POOLER_QUEUE_MAX)}.
