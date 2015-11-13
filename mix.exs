@@ -12,7 +12,7 @@ defmodule Pooler.Mixfile do
 
   defp package do
     [files: ~w(src rebar.config rebar.config.script Makefile concrete.mk README.org LICENSE VERSION),
-     contributors: ["Seth Falcon"],
+     maintainers: ["Seth Falcon"],
      licenses: ["Apache 2.0"],
      links: %{"GitHub" => "https://github.com/seth/pooler"}]
   end
