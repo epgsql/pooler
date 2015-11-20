@@ -41,7 +41,9 @@
          new_pool/1,
          pool_child_spec/1,
          rm_pool/1,
-         rm_group/1
+         rm_group/1,
+         call_free_members/2,
+         call_free_members/3
         ]).
 
 %% ------------------------------------------------------------------
@@ -290,6 +292,23 @@ return_member(_, error_no_members) ->
 pool_stats(PoolName) ->
     gen_server:call(PoolName, pool_stats).
 
+%% @doc Invokes `Fun' with arity 1 over all free members in pool with `PoolName'.
+%%
+-spec call_free_members(atom() | pid(), fun((pid()) -> term())) -> Res when
+      Res :: [{ok, term()} | {error, term()}].
+call_free_members(PoolName, Fun)
+  when (is_atom(PoolName) orelse is_pid(PoolName)) andalso is_function(Fun, 1) ->
+    call_free_members(PoolName, Fun, infinity).
+
+%% @doc Invokes `Fun' with arity 1 over all free members in pool with `PoolName'.
+%% `Timeout' sets the timeout of gen_server call.
+-spec call_free_members(atom() | pid(), Fun, timeout()) -> Res when
+      Fun :: fun((pid()) -> term()),
+      Res :: [{ok, term()} | {error, term()}].
+call_free_members(PoolName, Fun, Timeout)
+  when (is_atom(PoolName) orelse is_pid(PoolName)) andalso is_function(Fun, 1) ->
+    gen_server:call(PoolName, {call_free_members, Fun}, Timeout).
+
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
@@ -325,6 +344,8 @@ handle_call(pool_stats, _From, Pool) ->
     {reply, dict:to_list(Pool#pool.all_members), Pool};
 handle_call(dump_pool, _From, Pool) ->
     {reply, Pool, Pool};
+handle_call({call_free_members, Fun}, _From, #pool{free_pids = Pids} = Pool) ->
+  {reply, do_call_free_members(Fun, Pids), Pool};
 handle_call(_Request, _From, Pool) ->
     {noreply, Pool}.
 
@@ -900,3 +921,13 @@ terminate_pid(Pid, {Mod, Fun, Args}) when is_list(Args) ->
     end;
 terminate_pid(Pid, _) ->
     terminate_pid(Pid, ?DEFAULT_STOP_MFA).
+
+do_call_free_members(Fun, Pids) ->
+    [do_call_free_member(Fun, P) || P <- Pids].
+
+do_call_free_member(Fun, Pid) ->
+    try {ok, Fun(Pid)}
+    catch
+        _Class:Reason ->
+            {error, Reason}
+    end.

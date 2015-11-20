@@ -1129,6 +1129,75 @@ time_as_micros_test_() ->
     Tests = Zeros ++ Ones ++ Misc,
     [ ?_assertEqual(E, pooler:time_as_micros(I)) || {I, E} <- Tests ].
 
+
+call_free_members_test_() ->
+    NumWorkers = 10,
+    PoolName = test_pool_1,
+
+    {setup,
+     fun() ->
+             application:set_env(pooler, metrics_module, fake_metrics),
+             fake_metrics:start_link()
+     end,
+     fun(_X) ->
+             fake_metrics:stop()
+     end,
+     {foreach,
+      fun() ->
+              Pool = [{name, PoolName},
+                      {max_count, NumWorkers},
+                      {init_count, NumWorkers},
+                      {start_mfa,
+                       {pooled_gs, start_link, [{"type-0"}]}}],
+              application:unset_env(pooler, pools),
+              application:start(pooler),
+              pooler:new_pool(Pool)
+      end,
+      fun(_X) ->
+              application:stop(pooler)
+      end,
+      [
+       {"perform a ping across the pool when all workers are free",
+        fun() ->
+                ?assertEqual(NumWorkers, (dump_pool(PoolName))#pool.free_count),
+                Res = pooler:call_free_members(PoolName, fun pooled_gs:ping/1),
+
+                ?assertEqual(NumWorkers, count_pongs(Res))
+        end},
+       {"perform a ping across the pool when two workers are taken",
+        fun() ->
+                ?assertEqual(NumWorkers, (dump_pool(PoolName))#pool.free_count),
+                Pids = [pooler:take_member(PoolName) || _X <- lists:seq(0, 1)],
+                Res = pooler:call_free_members(PoolName, fun pooled_gs:ping/1),
+
+                ?assertEqual(NumWorkers -2, count_pongs(Res)),
+
+                [pooler:return_member(PoolName, P) || P <- Pids]
+        end},
+       {"perform an op where the op crashes all free members",
+        fun() ->
+                ?assertEqual(NumWorkers, (dump_pool(PoolName))#pool.free_count),
+                Res = pooler:call_free_members(PoolName,
+                                               fun pooled_gs:error_on_call/1),
+
+                ?assertEqual(NumWorkers, count_errors(Res))
+        end}
+      ]}}.
+
+count_pongs(Result) ->
+    lists:foldl(fun({ok, pong}, Acc) -> Acc + 1;
+                   ({error, _}, Acc) -> Acc
+                end,
+                0,
+                Result).
+
+count_errors(Result) ->
+    lists:foldl(fun({error, _}, Acc) -> Acc + 1;
+                   ({ok, _}, Acc) -> Acc
+                end,
+                0,
+                Result).
+
 % testing crash recovery means race conditions when either pids
 % haven't yet crashed or pooler hasn't recovered.  So this helper loops
 % forver until N pids are obtained, ignoring error_no_members.

@@ -19,6 +19,7 @@
          ping/1,
          ping_count/1,
          crash/1,
+         error_on_call/1,
          do_work/2,
          stop/1
         ]).
@@ -64,6 +65,9 @@ crash(S) ->
     gen_server:cast(S, crash),
     sent_crash_request.
 
+error_on_call(S) ->
+    gen_server:call(S, error_on_call).
+
 stop(S) ->
     gen_server:call(S, stop).
 
@@ -95,6 +99,8 @@ handle_call(ping, _From, #state{ping_count = C } = State) ->
     {reply, pong, State1};
 handle_call(ping_count, _From, #state{ping_count = C } = State) ->
     {reply, C, State};
+handle_call(error_on_call, _From, _State) ->
+    erlang:error({pooled_gs, requested_error});
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(_Request, _From, State) ->
