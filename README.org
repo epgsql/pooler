@@ -141,7 +141,7 @@ examples are valid:
 %% two minutes, your way
 {2, min}
 {120, sec}
-{1200, ms}
+{120000, ms}
 #+END_SRC
 
 The =cull_interval= determines the schedule when a check will be made
