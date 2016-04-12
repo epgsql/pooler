@@ -61,7 +61,7 @@ EDown = case proplists:get_value(use_edown, CONFIG) of
                 [DocOpts,
                  {deps,
                   [{edown, ".*",
-                    {git, "git://github.com/seth/edown.git",
+                    {git, "git://github.com/uwiger/edown.git",
                      {branch, "master"}}}]}]
            end,
 
