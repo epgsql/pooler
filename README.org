@@ -175,7 +175,7 @@ pooler:new_pool(PoolConfig).
 Here's an example session:
 
 #+BEGIN_SRC erlang
-application:start(pooler).
+pooler:start().
 P = pooler:take_member(mysql),
 % use P
 pooler:return_member(mysql, P, ok).
@@ -265,12 +265,12 @@ When enabled, the following metrics will be tracked:
    #+END_EXAMPLE
 3. Start a demo
    #+BEGIN_EXAMPLE
-   erl -pa .eunit ebin -config demo
+   make run
 
    Erlang R16B03 (erts-5.10.4) [source] [64-bit] [smp:8:8] [async-threads:10] [kernel-poll:false]
 
    Eshell V5.10.4  (abort with ^G)
-   1> application:start(pooler).
+   1> pooler:start().
    ok
    2> M = pooler:take_member(pool1).
    <0.44.0>

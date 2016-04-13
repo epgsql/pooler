@@ -1,38 +1,46 @@
-# This Makefile written by concrete
-#
-# {concrete_makefile_version, 2}
-#
-# ANY CHANGES TO THIS FILE WILL BE OVERWRITTEN on `concrete update`
-# IF YOU WANT TO CHANGE ANY OF THESE LINES BELOW, COPY THEM INTO
-# custom.mk FIRST
+.PHONY: all compile run test doc clean
+.PHONY: build_plt add_to_plt dialyzer
 
-# Use this to override concrete's default dialyzer options of
-# -Wunderspecs
-# DIALYZER_OPTS = ...
+REBAR=./rebar3
 
-# List dependencies that you do NOT want to be included in the
-# dialyzer PLT for the project here.  Typically, you would list a
-# dependency here if it isn't spec'd well and doesn't play nice with
-# dialyzer or otherwise mucks things up.
-#
-# DIALYZER_SKIP_DEPS = bad_dep_1 \
-#                      bad_dep_2
+DIALYZER_APPS = asn1 compiler crypto erts inets kernel public_key sasl ssl stdlib syntax_tools tools
 
-# If you want to add dependencies to the default "all" target provided
-# by concrete, add them here (along with make rules to build them if needed)
-# ALL_HOOK = ...
+all: $(REBAR) compile
 
-# custom.mk is totally optional
-custom_rules_file = $(wildcard custom.mk)
-ifeq ($(custom_rules_file),custom.mk)
-    include custom.mk
-endif
+compile:
+		$(REBAR) as dev compile
 
-concrete_rules_file = $(wildcard concrete.mk)
-ifeq ($(concrete_rules_file),concrete.mk)
-    include concrete.mk
+run:
+		erl -pa _build/dev/lib/*/ebin -boot start_sasl -config config/demo.config -run pooler
+
+test:
+		$(REBAR) eunit skip_deps=true verbose=3
+		$(REBAR) ct skip_deps=true verbose=3
+
+doc:
+		$(REBAR) as dev edoc
+
+clean:
+		$(REBAR) clean
+		rm -rf ./erl_crash.dump
+
+build_plt: clean compile
+ifneq ("$(wildcard erlang.plt)","")
+		@echo "Erlang plt file already exists"
 else
-    all:
-	@echo "ERROR: missing concrete.mk"
-	@echo "  run: concrete update"
+		dialyzer --build_plt --output_plt erlang.plt --apps $(DIALYZER_APPS)
 endif
+ifneq ("$(wildcard pooler.plt)","")
+		@echo "redis_pool plt file already exists"
+else
+		dialyzer --build_plt --output_plt pooler.plt _build/default/lib/*/ebin/
+endif
+
+add_to_plt: build_plt
+		dialyzer --add_to_plt --plt erlang.plt --output_plt erlang.plt.new --apps $(DIALYZER_APPS)
+		dialyzer --add_to_plt --plt pooler.plt --output_plt pooler.plt.new _build/default/lib/*/ebin/
+		mv erlang.plt.new erlang.plt
+		mv pooler.plt.new pooler.plt
+
+dialyzer:
+		dialyzer --src src -r src --plts erlang.plt pooler.plt -Wno_return -Werror_handling -Wrace_conditions -Wunderspecs | fgrep -v -f ./dialyzer.ignore-warnings
