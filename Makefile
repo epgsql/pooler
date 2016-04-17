@@ -15,7 +15,6 @@ run:
 
 test:
 		$(REBAR) eunit skip_deps=true verbose=3
-		$(REBAR) ct skip_deps=true verbose=3
 
 doc:
 		$(REBAR) as dev edoc
@@ -31,7 +30,7 @@ else
 		dialyzer --build_plt --output_plt erlang.plt --apps $(DIALYZER_APPS)
 endif
 ifneq ("$(wildcard pooler.plt)","")
-		@echo "redis_pool plt file already exists"
+		@echo "pooler plt file already exists"
 else
 		dialyzer --build_plt --output_plt pooler.plt _build/default/lib/*/ebin/
 endif
