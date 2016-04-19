@@ -1,7 +1,6 @@
 .PHONY: all compile run test doc clean
-.PHONY: build_plt add_to_plt dialyzer
 
-REBAR=./rebar3
+REBAR=$(shell which rebar3 || echo ./rebar3)
 
 DIALYZER_APPS = asn1 compiler crypto erts inets kernel public_key sasl ssl stdlib syntax_tools tools
 
@@ -20,26 +19,17 @@ doc:
 		$(REBAR) as dev edoc
 
 clean:
-		$(REBAR) clean
+		$(REBAR) as dev clean
 		rm -rf ./erl_crash.dump
 
-build_plt: clean compile
-ifneq ("$(wildcard erlang.plt)","")
-		@echo "Erlang plt file already exists"
-else
-		dialyzer --build_plt --output_plt erlang.plt --apps $(DIALYZER_APPS)
-endif
-ifneq ("$(wildcard pooler.plt)","")
-		@echo "pooler plt file already exists"
-else
-		dialyzer --build_plt --output_plt pooler.plt _build/default/lib/*/ebin/
-endif
-
-add_to_plt: build_plt
-		dialyzer --add_to_plt --plt erlang.plt --output_plt erlang.plt.new --apps $(DIALYZER_APPS)
-		dialyzer --add_to_plt --plt pooler.plt --output_plt pooler.plt.new _build/default/lib/*/ebin/
-		mv erlang.plt.new erlang.plt
-		mv pooler.plt.new pooler.plt
-
 dialyzer:
-		dialyzer --src src -r src --plts erlang.plt pooler.plt -Wno_return -Werror_handling -Wrace_conditions -Wunderspecs | fgrep -v -f ./dialyzer.ignore-warnings
+		$(REBAR) as dev dialyzer
+
+# Get rebar if it doesn't exist
+
+REBAR_URL=https://s3.amazonaws.com/rebar3/rebar3
+
+./rebar3:
+		erl -noinput -noshell -s inets -s ssl  -eval '{ok, _} = httpc:request(get, {"${REBAR_URL}", []}, [], [{stream, "${REBAR}"}])' -s init stop
+		chmod +x ${REBAR}
+
