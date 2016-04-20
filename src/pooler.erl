@@ -553,7 +553,8 @@ init_members_sync(N, #pool{name = PoolName} = Pool) ->
             {ok, Pool2}
     end.
 
-collect_init_members(#pool{starting_members = []} = Pool) ->
+collect_init_members(#pool{starting_members = Empty} = Pool)
+  when Empty =:= [] ->
     Pool;
 collect_init_members(#pool{member_start_timeout = StartTimeout} = Pool) ->
     Timeout = time_as_millis(StartTimeout),
@@ -932,9 +933,7 @@ terminate_pid(Pid, {Mod, Fun, Args}) when is_list(Args) ->
             terminate_pid(Pid, ?DEFAULT_STOP_MFA);
         _Result ->
             ok
-    end;
-terminate_pid(Pid, _) ->
-    terminate_pid(Pid, ?DEFAULT_STOP_MFA).
+    end.
 
 do_call_free_members(Fun, Pids) ->
     [do_call_free_member(Fun, P) || P <- Pids].
