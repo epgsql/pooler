@@ -7,8 +7,8 @@ all: compile
 compile: $(REBAR)
 	$(REBAR) as dev compile
 
-run:
-	erl -pa _build/dev/lib/*/ebin -boot start_sasl -config config/demo.config -run pooler
+run: $(REBAR)
+	@$(REBAR) as dev shell --apps pooler --config config/demo.config
 
 test: $(REBAR)
 	$(REBAR) eunit skip_deps=true verbose=3
