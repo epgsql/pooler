@@ -99,7 +99,7 @@
           %% A queue of requestors for blocking take member requests
           queued_requestors = queue:new() :: p_requestor_queue(),
           %% The max depth of the queue
-          queue_max = 50
+          queue_max = 50 :: non_neg_integer()
          }).
 
 -define(gv(X, Y), proplists:get_value(X, Y)).
