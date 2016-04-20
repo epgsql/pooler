@@ -845,11 +845,6 @@ send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
     MetricName = pool_metric_exometer(PoolName, Label),
     MetricsMod:update_or_create(MetricName, Value, counter, []),
     ok;
-send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
-                   metrics_api = exometer}, Label, {dec, Value}, counter) ->
-    MetricName = pool_metric_exometer(PoolName, Label),
-    MetricsMod:update_or_create(MetricName, - Value, counter, []),
-    ok;
 % Exometer does not support 'history' type metrics right now.
 send_metric(#pool{name = _PoolName, metrics_mod = _MetricsMod,
                   metrics_api = exometer}, _Label, _Value, history) ->
