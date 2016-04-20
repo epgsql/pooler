@@ -25,3 +25,4 @@ doc/*.md
 bench/tests
 bench/deps
 
+/rebar3
