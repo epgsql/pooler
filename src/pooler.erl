@@ -12,8 +12,6 @@
 -behaviour(gen_server).
 
 -include("pooler.hrl").
--include_lib("eunit/include/eunit.hrl").
-
 
 %% type specs for pool metrics
 -type metric_value() :: 'unknown_pid' |
