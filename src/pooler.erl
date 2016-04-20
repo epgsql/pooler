@@ -27,6 +27,9 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
+-export([start/0,
+         stop/0]).
+
 -export([accept_member/2,
          start_link/1,
          take_member/1,
@@ -61,6 +64,19 @@
 -ifdef(TEST).
 -compile([export_all]).
 -endif.
+
+%% ------------------------------------------------------------------
+%% Application API
+%% ------------------------------------------------------------------
+
+-spec start() -> 'ok'.
+start() ->
+    {ok, _} = application:ensure_all_started(pooler),
+    ok.
+
+-spec stop() -> 'ok'.
+stop() ->
+    ok = application:stop(pooler).
 
 %% ------------------------------------------------------------------
 %% API Function Definitions
@@ -127,8 +143,8 @@ rm_pool(PoolName) ->
 
 %% @doc Terminates the group and all pools in that group.
 %%
-%% If termination of any member pool fails, `rm_group/1` returns
-%% `{error, {failed_delete_pools, Pools}}`, where `Pools` is a list
+%% If termination of any member pool fails, `rm_group/1' returns
+%% `{error, {failed_delete_pools, Pools}}', where `Pools' is a list
 %% of pools that failed to terminate.
 %%
 %% The group is NOT terminated if any member pool did not

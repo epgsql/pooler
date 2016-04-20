@@ -1,38 +1,35 @@
-# This Makefile written by concrete
-#
-# {concrete_makefile_version, 2}
-#
-# ANY CHANGES TO THIS FILE WILL BE OVERWRITTEN on `concrete update`
-# IF YOU WANT TO CHANGE ANY OF THESE LINES BELOW, COPY THEM INTO
-# custom.mk FIRST
+.PHONY: all compile run test doc clean
 
-# Use this to override concrete's default dialyzer options of
-# -Wunderspecs
-# DIALYZER_OPTS = ...
+REBAR=$(shell which rebar3 || echo ./rebar3)
 
-# List dependencies that you do NOT want to be included in the
-# dialyzer PLT for the project here.  Typically, you would list a
-# dependency here if it isn't spec'd well and doesn't play nice with
-# dialyzer or otherwise mucks things up.
-#
-# DIALYZER_SKIP_DEPS = bad_dep_1 \
-#                      bad_dep_2
+DIALYZER_APPS = asn1 compiler crypto erts inets kernel public_key sasl ssl stdlib syntax_tools tools
 
-# If you want to add dependencies to the default "all" target provided
-# by concrete, add them here (along with make rules to build them if needed)
-# ALL_HOOK = ...
+all: $(REBAR) compile
 
-# custom.mk is totally optional
-custom_rules_file = $(wildcard custom.mk)
-ifeq ($(custom_rules_file),custom.mk)
-    include custom.mk
-endif
+compile:
+		$(REBAR) as dev compile
 
-concrete_rules_file = $(wildcard concrete.mk)
-ifeq ($(concrete_rules_file),concrete.mk)
-    include concrete.mk
-else
-    all:
-	@echo "ERROR: missing concrete.mk"
-	@echo "  run: concrete update"
-endif
+run:
+		erl -pa _build/dev/lib/*/ebin -boot start_sasl -config config/demo.config -run pooler
+
+test:
+		$(REBAR) eunit skip_deps=true verbose=3
+
+doc:
+		$(REBAR) as dev edoc
+
+clean:
+		$(REBAR) as dev clean
+		rm -rf ./erl_crash.dump
+
+dialyzer:
+		$(REBAR) as dev dialyzer
+
+# Get rebar if it doesn't exist
+
+REBAR_URL=https://s3.amazonaws.com/rebar3/rebar3
+
+./rebar3:
+		erl -noinput -noshell -s inets -s ssl  -eval '{ok, _} = httpc:request(get, {"${REBAR_URL}", []}, [], [{stream, "${REBAR}"}])' -s init stop
+		chmod +x ${REBAR}
+
