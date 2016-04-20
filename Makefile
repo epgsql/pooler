@@ -2,34 +2,34 @@
 
 REBAR=$(shell which rebar3 || echo ./rebar3)
 
-DIALYZER_APPS = asn1 compiler crypto erts inets kernel public_key sasl ssl stdlib syntax_tools tools
+all: compile
 
-all: $(REBAR) compile
-
-compile:
-		$(REBAR) as dev compile
+compile: $(REBAR)
+	$(REBAR) as dev compile
 
 run:
-		erl -pa _build/dev/lib/*/ebin -boot start_sasl -config config/demo.config -run pooler
+	erl -pa _build/dev/lib/*/ebin -boot start_sasl -config config/demo.config -run pooler
 
-test:
-		$(REBAR) eunit skip_deps=true verbose=3
+test: $(REBAR)
+	$(REBAR) eunit skip_deps=true verbose=3
 
-doc:
-		$(REBAR) as dev edoc
+doc: $(REBAR)
+	$(REBAR) as dev edoc
 
-clean:
-		$(REBAR) as dev clean
-		rm -rf ./erl_crash.dump
+clean: $(REBAR)
+	$(REBAR) as dev clean
+	$(REBAR) as test clean
+	@rm -rf ./erl_crash.dump
 
-dialyzer:
-		$(REBAR) as dev dialyzer
+dialyzer: $(REBAR)
+	$(REBAR) as dev dialyzer
 
-# Get rebar if it doesn't exist
+# Get rebar3 if it doesn't exist. If rebar3 was found on PATH, the
+# $(REBAR) dep will be satisfied since the file will exist.
 
-REBAR_URL=https://s3.amazonaws.com/rebar3/rebar3
+REBAR_URL = https://s3.amazonaws.com/rebar3/rebar3
 
 ./rebar3:
-		erl -noinput -noshell -s inets -s ssl  -eval '{ok, _} = httpc:request(get, {"${REBAR_URL}", []}, [], [{stream, "${REBAR}"}])' -s init stop
+	@echo "Fetching rebar3 from $(REBAR_URL)"
+	@erl -noinput -noshell -s inets -s ssl  -eval '{ok, _} = httpc:request(get, {"${REBAR_URL}", []}, [], [{stream, "${REBAR}"}])' -s init stop
 		chmod +x ${REBAR}
-
