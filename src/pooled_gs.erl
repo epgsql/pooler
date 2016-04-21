@@ -75,9 +75,9 @@ stop(S) ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 -record(state, {
-          type = "",
-          id,
-          ping_count = 0
+          type = "" :: string(),
+          id :: reference(),
+          ping_count = 0 :: non_neg_integer()
          }).
 
 init({Type}) ->
