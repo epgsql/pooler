@@ -28,11 +28,6 @@
          terminate/2,
          code_change/3]).
 
-%% To help with testing internal functions
--ifdef(TEST).
--compile([export_all]).
--endif.
-
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
