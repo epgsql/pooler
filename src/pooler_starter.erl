@@ -6,7 +6,6 @@
 -behaviour(gen_server).
 
 -include("pooler.hrl").
--include_lib("eunit/include/eunit.hrl").
 
 %% ------------------------------------------------------------------
 %% API Function Exports
@@ -84,9 +83,9 @@ stop_member_async(Pid) ->
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
--record(starter, {pool,
-                  parent,
-                  msg}).
+-record(starter, {pool :: #pool{},
+                  parent :: pid() | atom(),
+                  msg :: term()}).
 
 -spec init({#pool{}, pid() | atom()}) -> {'ok', #starter{}, 0}.
 init({Pool, Parent}) ->
