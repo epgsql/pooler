@@ -11,7 +11,8 @@ run: $(REBAR)
 	@$(REBAR) as dev shell --apps pooler --config config/demo.config
 
 test: $(REBAR)
-	$(REBAR) eunit skip_deps=true verbose=3
+	$(REBAR) eunit --cover skip_deps=true verbose=3
+	$(REBAR) cover
 
 doc: $(REBAR)
 	$(REBAR) as dev edoc
