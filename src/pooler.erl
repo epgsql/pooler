@@ -58,11 +58,6 @@
          terminate/2,
          code_change/3]).
 
-%% To help with testing internal functions
--ifdef(TEST).
--compile([export_all]).
--endif.
-
 %% ------------------------------------------------------------------
 %% Application API
 %% ------------------------------------------------------------------
@@ -553,7 +548,8 @@ init_members_sync(N, #pool{name = PoolName} = Pool) ->
             {ok, Pool2}
     end.
 
-collect_init_members(#pool{starting_members = []} = Pool) ->
+collect_init_members(#pool{starting_members = Empty} = Pool)
+  when Empty =:= [] ->
     Pool;
 collect_init_members(#pool{member_start_timeout = StartTimeout} = Pool) ->
     Timeout = time_as_millis(StartTimeout),
@@ -844,11 +840,6 @@ send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
     MetricName = pool_metric_exometer(PoolName, Label),
     MetricsMod:update_or_create(MetricName, Value, counter, []),
     ok;
-send_metric(#pool{name = PoolName, metrics_mod = MetricsMod,
-                   metrics_api = exometer}, Label, {dec, Value}, counter) ->
-    MetricName = pool_metric_exometer(PoolName, Label),
-    MetricsMod:update_or_create(MetricName, - Value, counter, []),
-    ok;
 % Exometer does not support 'history' type metrics right now.
 send_metric(#pool{name = _PoolName, metrics_mod = _MetricsMod,
                   metrics_api = exometer}, _Label, _Value, history) ->
@@ -932,9 +923,7 @@ terminate_pid(Pid, {Mod, Fun, Args}) when is_list(Args) ->
             terminate_pid(Pid, ?DEFAULT_STOP_MFA);
         _Result ->
             ok
-    end;
-terminate_pid(Pid, _) ->
-    terminate_pid(Pid, ?DEFAULT_STOP_MFA).
+    end.
 
 do_call_free_members(Fun, Pids) ->
     [do_call_free_member(Fun, P) || P <- Pids].

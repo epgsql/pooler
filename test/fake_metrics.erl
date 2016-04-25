@@ -48,7 +48,7 @@ get_metrics() ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 -record(state, {
-          metrics = []
+          metrics = [] :: list()
          }).
 
 init(_) ->
