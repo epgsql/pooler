@@ -410,7 +410,7 @@ pooler_groups_test_() ->
      fun() ->
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link(),
-             pg2:start()
+             {ok, _} = pg2:start()
      end,
      fun(_X) ->
              fake_metrics:stop(),
