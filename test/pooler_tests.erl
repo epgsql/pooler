@@ -409,10 +409,12 @@ pooler_groups_test_() ->
     {setup,
      fun() ->
              application:set_env(pooler, metrics_module, fake_metrics),
-             fake_metrics:start_link()
+             fake_metrics:start_link(),
+             pg2:start()
      end,
      fun(_X) ->
-             fake_metrics:stop()
+             fake_metrics:stop(),
+             application:stop(pg2)
      end,
     {foreach,
      % setup
@@ -439,12 +441,10 @@ pooler_groups_test_() ->
                      ],
              application:set_env(pooler, pools, Pools),
              %% error_logger:delete_report_handler(error_logger_tty_h),
-             pg2:start(),
              application:start(pooler)
      end,
      fun(_X) ->
-             application:stop(pooler),
-             application:stop(pg2)
+             application:stop(pooler)
      end,
      [
       {"take and return one group member (repeated)",
