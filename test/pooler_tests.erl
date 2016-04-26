@@ -122,7 +122,7 @@ pooler_basics_via_config_test_() ->
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
              error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler)
+             ok = application:start(pooler)
      end,
      fun(_X) ->
              application:stop(pooler)
@@ -148,7 +148,7 @@ pooler_basics_dynamic_test_() ->
                       {pooled_gs, start_link, [{"type-0"}]}}],
              application:unset_env(pooler, pools),
              error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler),
+             ok = application:start(pooler),
              pooler:new_pool(Pool)
      end,
      fun(_X) ->
@@ -175,7 +175,7 @@ pooler_basics_integration_to_other_supervisor_test_() ->
                       {pooled_gs, start_link, [{"type-0"}]}}],
              application:unset_env(pooler, pools),
              error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler),
+             ok = application:start(pooler),
              supervisor:start_link(fake_external_supervisor, Pool)
      end,
      fun({ok, SupPid}) ->
@@ -441,7 +441,7 @@ pooler_groups_test_() ->
                      ],
              application:set_env(pooler, pools, Pools),
              %% error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler)
+             ok = application:start(pooler)
      end,
      fun(_X) ->
              application:stop(pooler)
@@ -579,7 +579,7 @@ pooler_limit_failed_adds_test_() ->
              application:stop(pooler)
      end,
      fun() ->
-             application:start(pooler),
+             ok = application:start(pooler),
              ?assertEqual(error_no_members, pooler:take_member(test_pool_1)),
              ?assertEqual(error_no_members, pooler:take_member(test_pool_1))
      end}.
@@ -597,7 +597,7 @@ pooler_scheduled_cull_test_() ->
                        {max_age, {0, min}}]],
              application:set_env(pooler, pools, Pools),
              %% error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler)
+             ok = application:start(pooler)
      end,
      fun(_X) ->
              fake_metrics:stop(),
@@ -688,7 +688,7 @@ random_message_test_() ->
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
              error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler),
+             ok = application:start(pooler),
              %% now send some bogus messages
              %% do the call in a throw-away process to avoid timeout error
              spawn(fun() -> catch gen_server:call(test_pool_1, {unexpected_garbage_msg, 5}) end),
@@ -730,7 +730,7 @@ pooler_integration_long_init_test_() ->
                         {pooled_gs, start_link, [{"type-0", fun() -> timer:sleep(15) end}]}}],
 
              application:set_env(pooler, pools, [Pool]),
-             application:start(pooler)
+             ok = application:start(pooler)
      end,
      % cleanup
      fun(_) ->
@@ -792,7 +792,7 @@ pooler_integration_queueing_test_() ->
 
              application:set_env(pooler, pools, [Pool]),
              fake_metrics:start_link(),
-             application:start(pooler)
+             ok = application:start(pooler)
      end,
      % cleanup
      fun(_) ->
@@ -888,7 +888,7 @@ pooler_integration_queueing_return_member_test_() ->
 
              application:set_env(pooler, pools, [Pool]),
              fake_metrics:start_link(),
-             application:start(pooler)
+             ok = application:start(pooler)
      end,
      % cleanup
      fun(_) ->
@@ -943,7 +943,7 @@ pooler_integration_test_() ->
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
              error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler),
+             ok = application:start(pooler),
              Users = [ start_user() || _X <- lists:seq(1, 10) ],
              Users
      end,
@@ -1009,7 +1009,7 @@ pooler_auto_grow_disabled_by_default_test_() ->
                       {pooled_gs, start_link, [{"type-0"}]}}],
              application:unset_env(pooler, pools),
              error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler),
+             ok = application:start(pooler),
              pooler:new_pool(Pool)
      end,
      fun(_X) ->
@@ -1047,7 +1047,7 @@ pooler_auto_grow_enabled_test_() ->
                       {pooled_gs, start_link, [{"type-0"}]}}],
              application:unset_env(pooler, pools),
              error_logger:delete_report_handler(error_logger_tty_h),
-             application:start(pooler),
+             ok = application:start(pooler),
              pooler:new_pool(Pool)
      end,
      fun(_X) ->
@@ -1150,7 +1150,7 @@ call_free_members_test_() ->
                       {start_mfa,
                        {pooled_gs, start_link, [{"type-0"}]}}],
               application:unset_env(pooler, pools),
-              application:start(pooler),
+              ok = application:start(pooler),
               pooler:new_pool(Pool)
       end,
       fun(_X) ->
