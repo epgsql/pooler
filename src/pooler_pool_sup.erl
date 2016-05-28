@@ -4,7 +4,8 @@
 
 -export([start_link/1, init/1,
          pool_sup_name/1,
-         member_sup_name/1]).
+         member_sup_name/1,
+         build_member_sup_name/1]).
 
 -include("pooler.hrl").
 
@@ -25,8 +26,10 @@ init(#pool{} = Pool) ->
     Restart = {one_for_all, 5, 60},
     {ok, {Restart, [MemberSupSpec, PoolerSpec]}}.
 
-
 member_sup_name(#pool{name = PoolName}) ->
+    build_member_sup_name(PoolName).
+
+build_member_sup_name(PoolName) ->
     list_to_atom("pooler_" ++ atom_to_list(PoolName) ++ "_member_sup").
 
 pool_sup_name(#pool{name = PoolName}) ->
