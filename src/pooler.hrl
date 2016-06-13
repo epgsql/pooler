@@ -5,8 +5,11 @@
 -define(DEFAULT_AUTO_GROW_THRESHOLD, undefined).
 -define(POOLER_GROUP_TABLE, pooler_group_table).
 -define(DEFAULT_POOLER_QUEUE_MAX, 50).
+-define(POOLER_POOL_NAME, '$pooler_pool_name').
 -define(POOLER_PID, '$pooler_pid').
--define(DEFAULT_STOP_MFA, {erlang, exit, [?POOLER_PID, kill]}).
+-define(DEFAULT_STOP_MFA, {supervisor,
+                           terminate_child,
+                           [?POOLER_POOL_NAME, ?POOLER_PID]}).
 
 -type member_info() :: {string(), free | pid(), {_, _, _}}.
 -type free_member_info() :: {string(), free, {_, _, _}}.

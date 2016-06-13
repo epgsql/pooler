@@ -729,7 +729,7 @@ remove_pid(Pid, Pool) ->
             FreePids = lists:delete(Pid, Pool#pool.free_pids),
             NumFree = Pool#pool.free_count - 1,
             Pool1 = Pool#pool{free_pids = FreePids, free_count = NumFree},
-            terminate_pid(Pid, StopMFA),
+            terminate_pid(PoolName, Pid, StopMFA),
             send_metric(Pool1, killed_free_count, {inc, 1}, counter),
             Pool1#pool{all_members = dict:erase(Pid, AllMembers)};
         {ok, {MRef, CPid, _Time}} ->
@@ -737,7 +737,7 @@ remove_pid(Pid, Pool) ->
             %% the consumer.
             erlang:demonitor(MRef, [flush]),
             Pool1 = Pool#pool{in_use_count = Pool#pool.in_use_count - 1},
-            terminate_pid(Pid, StopMFA),
+            terminate_pid(PoolName, Pid, StopMFA),
             send_metric(Pool1, killed_in_use_count, {inc, 1}, counter),
             Pool1#pool{consumer_to_pid = cpmap_remove(Pid, CPid, CPMap),
                        all_members = dict:erase(Pid, AllMembers)};
@@ -911,19 +911,26 @@ maybe_reply({Member, NewPool}) ->
 %% Terminates the pid's pool member given a MFA that gets applied. The list
 %% of arguments must contain the fixed atom ?POOLER_PID, which is replaced
 %% by the target pid. Failure to provide a valid MFA will lead to use the
-%% default callback, i.e `erlang:exit(Pid, kill)`.
--spec terminate_pid(pid(), {atom(), atom(), [term()]}) -> ok.
-terminate_pid(Pid, {Mod, Fun, Args}) when is_list(Args) ->
-    NewArgs = [case Arg of
-                   ?POOLER_PID -> Pid;
-                   _ -> Arg
-               end || Arg <- Args],
+%% default callback.
+-spec terminate_pid(atom(), pid(), {atom(), atom(), [term()]}) -> ok.
+terminate_pid(PoolName, Pid, {Mod, Fun, Args}) when is_list(Args) ->
+    NewArgs = replace_placeholders(PoolName, Pid, Args),
     case catch erlang:apply(Mod, Fun, NewArgs) of
         {'EXIT', _} ->
-            terminate_pid(Pid, ?DEFAULT_STOP_MFA);
+            terminate_pid(PoolName, Pid, ?DEFAULT_STOP_MFA);
         _Result ->
             ok
     end.
+
+replace_placeholders(Name, Pid, Args) ->
+  [case Arg of
+     ?POOLER_POOL_NAME ->
+       pooler_pool_sup:build_member_sup_name(Name);
+     ?POOLER_PID ->
+       Pid;
+     _ ->
+       Arg
+   end || Arg <- Args].
 
 do_call_free_members(Fun, Pids) ->
     [do_call_free_member(Fun, P) || P <- Pids].

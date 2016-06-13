@@ -1098,6 +1098,51 @@ pooler_custom_stop_mfa_test_() ->
                ?assertEqual(normal, Reason)
        end}]}.
 
+no_error_logger_reports_after_culling_test_() ->
+    %% damn those wraiths! This is the cure
+    {foreach,
+     fun() ->
+             {ok, _Pid} = error_logger_mon:start_link(),
+             Pool = [{name, test_pool_1},
+                     {max_count, 3},
+                     {init_count, 2},
+                     {cull_interval, {200, ms}},
+                     {max_age, {0, min}},
+                     {start_mfa, {pooled_gs, start_link, [{type}]}}],
+             application:set_env(pooler, pools, [Pool])
+     end,
+     fun(_) ->
+             ok = error_logger_mon:stop(),
+             error_logger:delete_report_handler(error_logger_pooler_h),
+             application:unset_env(pooler, pools)
+     end,
+     [
+      {"Force supervisor to report by using exit/2 instead of terminate_child",
+       fun() ->
+               {ok, [Pool]} = application:get_env(pooler, pools),
+               Stop = {stop_mfa, {erlang, exit, ['$pooler_pid', kill]}},
+               application:set_env(pooler, pools, [[Stop | Pool]]),
+               ok = application:start(pooler),
+               error_logger:add_report_handler(error_logger_pooler_h),
+               Reason = monitor_members_trigger_culling_and_return_reason(),
+               error_logger:delete_report_handler(error_logger_pooler_h),
+               ok = application:stop(pooler),
+               ?assertEqual(killed, Reason),
+               ?assertEqual(1, error_logger_mon:get_msg_count())
+       end},
+      {"Default MFA shouldn't generate any reports during culling",
+       fun() ->
+               ok = application:start(pooler),
+               error_logger:add_report_handler(error_logger_pooler_h),
+               Reason = monitor_members_trigger_culling_and_return_reason(),
+               error_logger:delete_report_handler(error_logger_pooler_h),
+               ok = application:stop(pooler),
+               ?assertEqual(killed, Reason),
+               ?assertEqual(0, error_logger_mon:get_msg_count())
+       end}
+     ]}.
+
+
 monitor_members_trigger_culling_and_return_reason() ->
     Pids = get_n_pids(test_pool_1, 3, []),
     [ erlang:monitor(process, P) || P <- Pids ],
