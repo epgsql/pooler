@@ -784,11 +784,10 @@ cull_members_from_pool(#pool{init_count = C, max_count = C} = Pool) ->
 cull_members_from_pool(#pool{name = PoolName,
                              free_count = FreeCount,
                              init_count = InitCount,
-                             in_use_count = InUseCount,
                              cull_interval = Delay,
                              max_age = MaxAge,
                              all_members = AllMembers} = Pool) ->
-    MaxCull = FreeCount - (InitCount - InUseCount),
+    MaxCull = FreeCount - InitCount,
     Pool1 = case MaxCull > 0 of
                 true ->
                     MemberInfo = member_info(Pool#pool.free_pids, AllMembers),
