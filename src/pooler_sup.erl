@@ -19,7 +19,7 @@ init([]) ->
             {ok, M} ->
               M;
             undefined ->
-              undefined
+              pools
           end,
     Config = case application:get_env(pooler, Map) of
                  {ok, C} ->
