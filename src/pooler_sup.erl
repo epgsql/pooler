@@ -15,7 +15,13 @@ start_link() ->
 
 init([]) ->
     %% a list of pool configs
-    Config = case application:get_env(pooler, pools) of
+	Map = case application:get_env(pooler, mapping) of
+            {ok, M} ->
+              M;
+            undefined ->
+              undefined
+          end,
+    Config = case application:get_env(pooler, Map) of
                  {ok, C} ->
                      C;
                  undefined ->
