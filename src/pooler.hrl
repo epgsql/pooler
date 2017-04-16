@@ -29,6 +29,7 @@
           group            :: atom(),
           max_count = 100  :: non_neg_integer(),
           init_count = 10  :: non_neg_integer(),
+          lazy = false     :: boolean(),
           start_mfa        :: {atom(), atom(), [term()]},
           free_pids = []   :: [pid()],
           in_use_count = 0 :: non_neg_integer(),
