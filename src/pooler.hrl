@@ -20,8 +20,8 @@
 -type p_dict() :: dict:dict().
 -type p_requestor_queue() :: queue:queue({{pid(), _}, timer:tref()}).
 -else.
--type p_dict() :: dict().
--type p_requestor_queue() :: queue().
+-type p_dict() :: dict:dict().
+-type p_requestor_queue() :: queue:queue().
 -endif.
 
 -record(pool, {

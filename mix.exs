@@ -1,13 +1,13 @@
 defmodule Pooler.Mixfile do
   use Mix.Project
 
-  @version File.read!("VERSION") |> String.strip
+  @version File.read!("VERSION") |> String.trim
 
   def project do
     [app: :pooler,
      version: @version,
      description: "An OTP Process Pool Application",
-     package: package]
+     package: package()]
   end
 
   defp package do
