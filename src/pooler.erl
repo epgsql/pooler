@@ -38,6 +38,7 @@
          return_member/2,
          return_member/3,
          pool_stats/1,
+         pool_utilization/1,
          manual_start/0,
          new_pool/1,
          pool_child_spec/1,
@@ -301,6 +302,14 @@ return_member(_, error_no_members) ->
 pool_stats(PoolName) ->
     gen_server:call(PoolName, pool_stats).
 
+%% @doc Obtain utilization info for a pool.
+%%
+%% Format of the return value is subject to change, but for now it
+%% will be a proplist to maintain backcompat with R16.
+-spec pool_utilization(atom() | pid()) -> [{atom(), integer()}].
+pool_utilization(PoolName) ->
+    gen_server:call(PoolName, pool_utilization).
+
 %% @doc Invokes `Fun' with arity 1 over all free members in pool with `PoolName'.
 %%
 -spec call_free_members(atom() | pid(), fun((pid()) -> term())) -> Res when
@@ -351,6 +360,8 @@ handle_call(stop, _From, Pool) ->
     {stop, normal, stop_ok, Pool};
 handle_call(pool_stats, _From, Pool) ->
     {reply, dict:to_list(Pool#pool.all_members), Pool};
+handle_call(pool_utilization, _From, Pool) ->
+    {reply, compute_utilization(Pool), Pool};
 handle_call(dump_pool, _From, Pool) ->
     {reply, Pool, Pool};
 handle_call({call_free_members, Fun}, _From, #pool{free_pids = Pids} = Pool) ->
@@ -475,7 +486,7 @@ reply_to_queued_requestor(TRef, Pid, From = {APid, _}, NewQueuedRequestors, Pool
     send_metric(Pool, events, error_no_members, history),
     gen_server:reply(From, Pid),
     Pool1.
-    
+
 
 -spec take_member_bookkeeping(pid(),
                               {pid(), _},
@@ -931,6 +942,17 @@ replace_placeholders(Name, Pid, Args) ->
      _ ->
        Arg
    end || Arg <- Args].
+
+compute_utilization(#pool{max_count = MaxCount,
+                          in_use_count = InUseCount,
+                          free_count = FreeCount,
+                          queued_requestors = Queue,
+                          queue_max = QueueMax}) ->
+    [{max_count, MaxCount},
+      {in_use_count, InUseCount},
+      {free_count, FreeCount},
+      {queued_count, queue:len(Queue)}, %% Note not O(n), so in pathological cases this might be expensive
+      {queue_max, QueueMax}].
 
 do_call_free_members(Fun, Pids) ->
     [do_call_free_member(Fun, P) || P <- Pids].
