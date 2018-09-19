@@ -743,7 +743,7 @@ remove_pid(Pid, Pool) ->
                        all_members = dict:erase(Pid, AllMembers)};
         error ->
             error_logger:error_report({{pool, PoolName}, unknown_pid, Pid,
-                                       erlang:get_stacktrace()}),
+                                       ?GET_STACKTRACE}),
             send_metric(Pool, events, unknown_pid, history),
             Pool
     end.
