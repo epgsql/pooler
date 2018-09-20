@@ -24,6 +24,20 @@
 -type p_requestor_queue() :: queue().
 -endif.
 
+-ifdef(rand_only).
+-define(RANDOM_SEED(X), rand:seed(exs1024s, X)).
+-define(RANDOM_UNIFORM(X), rand:uniform(X)).
+-else.
+-define(RANDOM_SEED(X), random:seed(X)).
+-define(RANDOM_UNIFORM(X), random:uniform(X)).
+-endif.
+
+-ifdef(fun_stacktrace).
+-define(GET_STACKTRACE, erlang:get_stacktrace()).
+-else.
+-define(GET_STACKTRACE, try throw(fake_stacktrace) catch _:_:S -> S end).
+-endif.
+
 -record(pool, {
           name             :: atom(),
           group            :: atom(),

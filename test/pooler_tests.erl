@@ -769,7 +769,7 @@ sleep_for_configured_timeout() ->
                     _  ->
                         0
                 end,
-    timer:sleep(SleepTime).    
+    timer:sleep(SleepTime).
 
 pooler_integration_queueing_test_() ->
     {foreach,
@@ -1125,6 +1125,8 @@ no_error_logger_reports_after_culling_test_() ->
                ok = application:start(pooler),
                error_logger:add_report_handler(error_logger_pooler_h),
                Reason = monitor_members_trigger_culling_and_return_reason(),
+               %% we need to wait for the message to arrive before deleting handler
+               timer:sleep(250),
                error_logger:delete_report_handler(error_logger_pooler_h),
                ok = application:stop(pooler),
                ?assertEqual(killed, Reason),
