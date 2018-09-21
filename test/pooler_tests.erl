@@ -402,6 +402,17 @@ basic_tests() ->
                Bad = spawn(fun() -> ok end),
                FakeStarter = spawn(fun() -> starter end),
                ?assertEqual(ok, pooler:accept_member(test_pool_1, {FakeStarter, Bad}))
+       end},
+
+      {"utilization returns sane results",
+       fun() ->
+               #pool{max_count = MaxCount, queue_max = QueueMax} = Pool = sys:get_state(test_pool_1),
+
+               ?assertEqual(MaxCount, ?gv(max_count, pooler:pool_utilization(test_pool_1))),
+               ?assertEqual(0, ?gv(in_use_count, pooler:pool_utilization(test_pool_1))),
+               ?assertEqual(2, ?gv(free_count, pooler:pool_utilization(test_pool_1))),
+               ?assertEqual(0, ?gv(queued_count, pooler:pool_utilization(test_pool_1))),
+               ?assertEqual(QueueMax, ?gv(queue_max, pooler:pool_utilization(test_pool_1)))
        end}
       ].
 
@@ -621,7 +632,8 @@ pooler_scheduled_cull_test_() ->
                           [ pooler:return_member(test_pool_1, P) || P <- Pids ],
                           %% wait for longer than cull delay
                           timer:sleep(250),
-                          ?assertEqual(2, length(pooler:pool_stats(test_pool_1)))
+                          ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
+                          ?assertEqual(2, ?gv(free_count,pooler:pool_utilization(test_pool_1)))
                   end}
          end,
 
@@ -631,7 +643,8 @@ pooler_scheduled_cull_test_() ->
                           [ pooler:return_member(test_pool_1, P) || P <- Pids ],
                           %% wait for longer than cull delay
                           timer:sleep(250),
-                          ?assertEqual(2, length(pooler:pool_stats(test_pool_1)))
+                          ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
+                          ?assertEqual(2, ?gv(free_count,pooler:pool_utilization(test_pool_1)))
                   end}
          end,
 
@@ -668,6 +681,8 @@ in_use_members_not_culled(Pids, N) ->
              PidCount = length(Pids),
              ?assertEqual(PidCount,
                           length(pooler:pool_stats(test_pool_1))),
+             ?assertEqual(0, ?gv(free_count,pooler:pool_utilization(test_pool_1))),
+             ?assertEqual(PidCount, ?gv(in_use_count,pooler:pool_utilization(test_pool_1))),
              Returns = lists:sublist(Pids, N),
              [ pooler:return_member(test_pool_1, P)
                || P <- Returns ],
@@ -814,6 +829,7 @@ pooler_integration_queueing_test_() ->
                       ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
                       Val = pooler:take_member(test_pool_1, 0),
                       ?assertEqual(error_no_members, Val),
+                      ?assertEqual(0, ?gv(free_count,pooler:pool_utilization(test_pool_1))),
                       timer:sleep(50),
                       %Next request should be available
                       Pid = pooler:take_member(test_pool_1, 0),
@@ -847,8 +863,14 @@ pooler_integration_queueing_test_() ->
                                        end)
                         || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
                       ],
+                      ?assertEqual(0, ?gv(free_count,pooler:pool_utilization(test_pool_1))),
+                      ?assert(?gv(queued_count,pooler:pool_utilization(test_pool_1)) >=  1),
+                      ?assertEqual(10, ?gv(queue_max,pooler:pool_utilization(test_pool_1))),
+
                       timer:sleep(50),
                       ?assertEqual(10, queue:len((dump_pool(test_pool_1))#pool.queued_requestors)),
+                      ?assertEqual(10, ?gv(queue_max,pooler:pool_utilization(test_pool_1))),
+
                       ?assertEqual(pooler:take_member(test_pool_1, 500), error_no_members),
                       ExpectKeys = lists:sort([<<"pooler.test_pool_1.error_no_members_count">>,
                                                <<"pooler.test_pool_1.events">>,
