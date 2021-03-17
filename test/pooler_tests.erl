@@ -450,12 +450,12 @@ pooler_groups_test_() ->
                      ],
              application:set_env(pooler, pools, Pools),
              %% error_logger:delete_report_handler(error_logger_tty_h),
-             pg2:start(),
+             pg_start(),
              application:start(pooler)
      end,
      fun(_X) ->
              application:stop(pooler),
-             application:stop(pg2)
+             pg_stop()
      end,
      [
       {"take and return one group member (repeated)",
@@ -500,7 +500,7 @@ pooler_groups_test_() ->
       {"take member from empty group",
        fun() ->
                %% artificially empty group member list
-               [ pg2:leave(group_1, M) || M <- pg2:get_members(group_1) ],
+               [ pg_leave(group_1, M) || M <- pg_get_members(group_1) ],
                ?assertEqual(error_no_members, pooler:take_group_member(group_1))
        end},
 
@@ -1301,3 +1301,44 @@ starting_members(PoolName) ->
 
 dump_pool(PoolName) ->
     gen_server:call(PoolName, dump_pool).
+
+-ifdef(OTP_RELEASE). % >= OTP-21
+-if(?OTP_RELEASE >= 23).
+-define(USE_PG_NOT_PG2, true).
+-else.
+-undef(USE_PG_NOT_PG2).
+-endif.
+-else. % < OTP-21
+-undef(USE_PG_NOT_PG2).
+-endif.
+
+-ifdef(USE_PG_NOT_PG2).
+
+pg_start() ->
+  pg:start(_Scope = 'pg').
+
+pg_stop() ->
+  lists:foreach(fun(Group) -> pg:leave(Group, pg:get_members(Group)) end,
+                pg:which_groups()).
+
+pg_leave(Group, Pid) ->
+  pg:leave(Group, Pid).
+
+pg_get_members(Group) ->
+  pg:get_members(Group).
+
+-else.
+
+pg_start() ->
+  pg2:start().
+
+pg_stop() ->
+  application:stop(pg2).
+
+pg_leave(Group, Pid) ->
+  pg2:leave(Group, Pid).
+
+pg_get_members(Group) ->
+  pg2:get_members(Group).
+
+-endif.
