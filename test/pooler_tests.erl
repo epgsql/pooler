@@ -476,7 +476,7 @@ pooler_groups_test_() ->
 
       {"take member from unknown group",
        fun() ->
-               ?assertEqual({error_no_group, not_a_group},
+               ?assertEqual(error_no_members,
                             pooler:take_group_member(not_a_group))
        end},
 
@@ -545,7 +545,7 @@ pooler_groups_test_() ->
 
                ?assertExit({noproc, _}, pooler:take_member(test_pool_1)),
                ?assertExit({noproc, _}, pooler:take_member(test_pool_2)),
-               ?assertEqual({error_no_group, group_1},
+               ?assertEqual(error_no_members,
                             pooler:take_group_member(group_1))
        end},
 
@@ -569,7 +569,7 @@ pooler_groups_test_() ->
 
                ?assertExit({noproc, _}, pooler:take_member(test_pool_1)),
                ?assertExit({noproc, _}, pooler:take_member(test_pool_2)),
-               ?assertEqual({error_no_group, group_1},
+               ?assertEqual(error_no_members,
                             pooler:take_group_member(group_1))
        end}
      ]}}.
