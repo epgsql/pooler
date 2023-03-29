@@ -146,16 +146,12 @@ rm_pool(PoolName) ->
 %%
 -spec rm_group(atom()) -> ok | {error, {failed_rm_pools, [atom()]}}.
 rm_group(GroupName) ->
-    case pg2:get_local_members(GroupName) of
-        {error, {no_such_group, GroupName}} ->
-            ok;
-        Pools ->
-            case rm_group_members(Pools) of
-                [] ->
-                    pg2:delete(GroupName);
-                Failures ->
-                    {error, {failed_rm_pools, Failures}}
-            end
+    Pools = pg_get_local_members(GroupName),
+    case rm_group_members(Pools) of
+        [] ->
+            pg_delete(GroupName);
+        Failures ->
+            {error, {failed_rm_pools, Failures}}
     end.
 
 -spec rm_group_members([pid()]) -> [atom()].
@@ -208,11 +204,9 @@ take_member(PoolName, Timeout) when is_atom(PoolName) orelse is_pid(PoolName) ->
 %% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
 %% members are available in the randomly chosen pool, all other pools
 %% in the group are tried in order.
--spec take_group_member(atom()) -> pid() | error_no_members | {error_no_group, atom()}.
+-spec take_group_member(atom()) -> pid() | error_no_members.
 take_group_member(GroupName) ->
-    case pg2:get_local_members(GroupName) of
-        {error, {no_such_group, GroupName}} ->
-            {error_no_group, GroupName};
+    case pg_get_local_members(GroupName) of
         [] ->
             error_no_members;
         Pools ->
@@ -341,7 +335,7 @@ init(#pool{}=Pool) ->
     Pool2 = cull_members_from_pool(Pool1),
     {ok, NewPool} = init_members_sync(N, Pool2),
     %% trigger an immediate timeout, handled by handle_info to allow
-    %% us to register with pg2. We use the timeout mechanism to ensure
+    %% us to register with pg. We use the timeout mechanism to ensure
     %% that a server is added to a group only when it is ready to
     %% process messages.
     {ok, NewPool, 0}.
@@ -386,8 +380,8 @@ handle_info(timeout, #pool{group = undefined} = Pool) ->
     %% ignore
     {noreply, Pool};
 handle_info(timeout, #pool{group = Group} = Pool) ->
-    ok = pg2:create(Group),
-    ok = pg2:join(Group, self()),
+    ok = pg_create(Group),
+    ok = pg_join(Group, self()),
     {noreply, Pool};
 handle_info({'DOWN', MRef, process, Pid, Reason}, State) ->
     State1 =
@@ -963,3 +957,46 @@ do_call_free_member(Fun, Pid) ->
         _Class:Reason ->
             {error, Reason}
     end.
+
+-ifdef(OTP_RELEASE). % >= OTP-21
+-if(?OTP_RELEASE >= 23).
+-define(USE_PG_NOT_PG2, true).
+-else.
+-undef(USE_PG_NOT_PG2).
+-endif.
+-else. % < OTP-21
+-undef(USE_PG_NOT_PG2).
+-endif.
+
+-ifdef(USE_PG_NOT_PG2).
+
+pg_get_local_members(GroupName) ->
+  pg:get_local_members(GroupName).
+
+pg_delete(_GroupName) ->
+  ok.
+
+pg_create(_Group) ->
+  ok.
+
+pg_join(Group, Pid) ->
+  pg:join(Group, Pid).
+
+-else.
+
+pg_get_local_members(GroupName) ->
+  case pg2:get_local_members(GroupName) of
+    {error, {no_such_group, GroupName}} -> [];
+    Pids -> Pids
+  end.
+
+pg_delete(GroupName) ->
+  pg2:delete(GroupName).
+
+pg_create(Group) ->
+  pg2:create(Group).
+
+pg_join(Group, Pid) ->
+  pg2:join(Group, Pid).
+
+-endif.
