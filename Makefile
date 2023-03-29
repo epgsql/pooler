@@ -12,7 +12,7 @@ run: $(REBAR)
 	@$(REBAR) as dev shell --apps pooler --config config/demo.config
 
 test: $(REBAR)
-	$(REBAR) eunit --cover verbose=3
+	$(REBAR) eunit --cover
 	$(REBAR) cover --verbose --min_coverage $(MINIMAL_COVERAGE)
 
 xref: $(REBAR)

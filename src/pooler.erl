@@ -12,6 +12,7 @@
 -behaviour(gen_server).
 
 -include("pooler.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %% type specs for pool metrics
 -type metric_value() :: 'unknown_pid' |
@@ -532,7 +533,9 @@ accumulate_starting_member_not_stale(Pool, Now, SM = {Pid, StartTime}, MaxAgeSec
         true ->
             [SM | AccIn];
         false ->
-            error_logger:error_msg("pool '~s': starting member timeout", [Pool#pool.name]),
+            ?LOG_ERROR(#{label => "starting member timeout",
+                         pool => Pool#pool.name},
+                       #{domain => [pooler]}),
             send_metric(Pool, starting_member_timeout, {inc, 1}, counter),
             pooler_starter:stop_member_async(Pid),
             AccIn
@@ -546,8 +549,10 @@ init_members_sync(N, #pool{name = PoolName} = Pool) ->
     Pool1 = Pool#pool{starting_members = StartRefs},
     case collect_init_members(Pool1) of
         timeout ->
-            error_logger:error_msg("pool '~s': exceeded timeout waiting for ~B members",
-                                   [PoolName, Pool1#pool.init_count]),
+            ?LOG_ERROR(#{label => "exceeded timeout waiting for members",
+                         pool => PoolName,
+                         init_count => Pool1#pool.init_count},
+                       #{domain => [pooler]}),
             error({timeout, "unable to start members"});
         #pool{} = Pool2 ->
             {ok, Pool2}
@@ -653,8 +658,10 @@ do_return_member(Pid, ok, #pool{name = PoolName,
     clean_group_table(Pid, Pool),
     case dict:find(Pid, AllMembers) of
         {ok, {_, free, _}} ->
-            Fmt = "pool '~s': ignored return of free member ~p",
-            error_logger:warning_msg(Fmt, [PoolName, Pid]),
+            ?LOG_WARNING(#{label => "ignored return of free member",
+                           pool => PoolName,
+                           pid => Pid},
+                         #{domain => [pooler]}),
             Pool;
         {ok, {MRef, CPid, _}} ->
             #pool{free_pids = Free, in_use_count = NumInUse,
@@ -696,7 +703,7 @@ clean_group_table(MemberPid, #pool{group = _GroupName}) ->
 % If `Pid' is the last element in `CPid's pid list, then the `CPid'
 % entry is removed entirely.
 %
--spec cpmap_remove(pid(), pid() | free, p_dict()) -> p_dict().
+-spec cpmap_remove(pid(), pid() | free, dict:dict()) -> dict:dict().
 cpmap_remove(_Pid, free, CPMap) ->
     CPMap;
 cpmap_remove(Pid, CPid, CPMap) ->
@@ -747,25 +754,27 @@ remove_pid(Pid, Pool) ->
             Pool1#pool{consumer_to_pid = cpmap_remove(Pid, CPid, CPMap),
                        all_members = dict:erase(Pid, AllMembers)};
         error ->
-            error_logger:error_report({{pool, PoolName}, unknown_pid, Pid,
-                                       ?GET_STACKTRACE}),
+            ?LOG_ERROR(#{label => unknown_pid,
+                         pool => PoolName,
+                         pid => Pid},
+                       #{domain => [pooler]}),
             send_metric(Pool, events, unknown_pid, history),
             Pool
     end.
 
 -spec store_all_members(pid(),
-                        {reference(), free | pid(), {_, _, _}}, p_dict()) -> p_dict().
+                        {reference(), free | pid(), {_, _, _}}, dict:dict()) -> dict:dict().
 store_all_members(Pid, Val = {_MRef, _CPid, _Time}, AllMembers) ->
     dict:store(Pid, Val, AllMembers).
 
--spec set_cpid_for_member(pid(), pid(), p_dict()) -> p_dict().
+-spec set_cpid_for_member(pid(), pid(), dict:dict()) -> dict:dict().
 set_cpid_for_member(MemberPid, CPid, AllMembers) ->
     dict:update(MemberPid,
                 fun({MRef, free, Time = {_, _, _}}) ->
                         {MRef, CPid, Time}
                 end, AllMembers).
 
--spec add_member_to_consumer(pid(), pid(), p_dict()) -> p_dict().
+-spec add_member_to_consumer(pid(), pid(), dict:dict()) -> dict:dict().
 add_member_to_consumer(MemberPid, CPid, CPMap) ->
     %% we can't use dict:update here because we need to create the
     %% monitor if we aren't already tracking this consumer.
@@ -820,7 +829,7 @@ schedule_cull(PoolName, Delay) ->
     %% automatic cancelling
     erlang:send_after(DelayMillis, PoolName, cull_pool).
 
--spec member_info([pid()], p_dict()) -> [{pid(), member_info()}].
+-spec member_info([pid()], dict:dict()) -> [{pid(), member_info()}].
 member_info(Pids, AllMembers) ->
     [ {P, dict:fetch(P, AllMembers)} || P <- Pids ].
 

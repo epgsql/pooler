@@ -14,15 +14,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ["22.3", "23.3"]
-        os: ["ubuntu-20.04"]
-        rebar3: ["3.17.0"]
+        otp: ["25.3", "24.3"]
+        os: ["ubuntu-22.04"]
+        rebar3: ["3.20.0"]
         include:
-          - os: "ubuntu-20.04"
-            otp: "21.3"
-            rebar3: "3.15.2"
-          - os: "ubuntu-20.04"
-            otp: "20.3"
+          - otp: "23.3"
+            os: "ubuntu-20.04"
+            rebar3: "3.17.0"
+          - otp: "22.3"
+            os: "ubuntu-20.04"
+            rebar3: "3.17.0"
+          - otp: "21.3"
+            os: "ubuntu-20.04"
             rebar3: "3.15.2"
 
     steps:
