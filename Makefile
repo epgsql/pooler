@@ -1,6 +1,7 @@
 .PHONY: all compile run test doc clean
 
 REBAR=$(shell which rebar3 || echo ./rebar3)
+MINIMAL_COVERAGE=80
 
 all: compile
 
@@ -11,8 +12,11 @@ run: $(REBAR)
 	@$(REBAR) as dev shell --apps pooler --config config/demo.config
 
 test: $(REBAR)
-	$(REBAR) eunit --cover skip_deps=true verbose=3
-	$(REBAR) cover
+	$(REBAR) eunit --cover verbose=3
+	$(REBAR) cover --verbose --min_coverage $(MINIMAL_COVERAGE)
+
+xref: $(REBAR)
+	$(REBAR) xref
 
 doc: $(REBAR)
 	$(REBAR) as dev edoc
