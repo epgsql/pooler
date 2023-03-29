@@ -5,7 +5,7 @@ such as gen_servers, gen_fsms, or supervisors, and provide consumers
 with exclusive access to pool members using =pooler:take_member=.
 
 #+ATTR_HTML: alt="Build status images" title="Build status on Travis-CI"
-[[https://travis-ci.org/seth/pooler][https://travis-ci.org/seth/pooler.svg?branch=master]]
+https://github.com/epgsql/pooler/actions/workflows/ci.yml/badge.svg
 
 ** What pooler does
 
@@ -257,7 +257,7 @@ When enabled, the following metrics will be tracked:
 
 1. Clone the repo:
    #+BEGIN_EXAMPLE
-   git clone https://github.com/seth/pooler.git
+   git clone https://github.com/epgsql/pooler.git
    #+END_EXAMPLE
 2. Build and run tests:
    #+BEGIN_EXAMPLE

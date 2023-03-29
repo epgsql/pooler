@@ -1,6 +1,6 @@
 {application, pooler,
  [
-  {description, ""},
+  {description, "An OTP Process Pool Application"},
   {vsn, git},
   {registered, []},
   {applications, [
