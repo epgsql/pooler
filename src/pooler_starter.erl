@@ -6,6 +6,7 @@
 -behaviour(gen_server).
 
 -include("pooler.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %% ------------------------------------------------------------------
 %% API Function Exports
@@ -133,8 +134,10 @@ do_start_member(#pool{member_sup = PoolSup, name = PoolName}) ->
         {ok, Pid} ->
             {self(), Pid};
         Error ->
-            error_logger:error_msg("pool '~s' failed to start member: ~p",
-                                   [PoolName, Error]),
+            ?LOG_ERROR(#{label => "failed to start member",
+                         pool => PoolName,
+                         error => Error},
+                       #{domain => [pooler]}),
             {self(), Error}
     end.
 
