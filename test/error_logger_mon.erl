@@ -6,20 +6,36 @@
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
 
--record(state, {count = 0 :: integer()}).
+-record(state, {events = [] :: [logger:log_event()]}).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
 %% ------------------------------------------------------------------
-%% gen_server
+
 -export([start_link/0,
-         report/0,
+         report/1,
          get_msg_count/0,
-         stop/0
+         get_msgs/0,
+         reset/0,
+         stop/0,
+         install_handler/0,
+         install_handler/1,
+         uninstall_handler/0
         ]).
 
+%% OTP logger
+-export([log/2]).
+
+%% gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
+
+
+%% Logger handler
+
+log(Event, _) ->
+    error_logger_mon:report(Event),
+    ok.
 
 %% ------------------------------------------------------------------
 %% API Function Definitions
@@ -28,14 +44,45 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-report() ->
-    gen_server:call(?SERVER, report).
+report(Event) ->
+    gen_server:call(?SERVER, {report, Event}).
 
 get_msg_count() ->
     gen_server:call(?SERVER, get_count).
 
+get_msgs() ->
+    gen_server:call(?SERVER, get_events).
+
+reset() ->
+    gen_server:call(?SERVER, reset).
+
 stop() ->
     gen_server:call(?SERVER, stop).
+
+install_handler() ->
+    install_handler(error_logger).
+
+install_handler(FilterName) ->
+    logger:add_handler(
+      ?MODULE,
+      ?MODULE,
+      #{level => all,
+        filter_default => stop,
+        filters => [{FilterName, filter(FilterName)}]}).
+
+filter(error_logger) ->
+    {fun error_logger_filter/2, []};
+filter(pooler) ->
+    {fun logger_filters:domain/2, {log, sub, [pooler]}}.
+
+
+uninstall_handler() ->
+    logger:remove_handler(?MODULE).
+
+error_logger_filter(#{meta := #{error_logger := #{tag := _}}} = E, _) ->
+    E;
+error_logger_filter(_, _) ->
+    ignore.
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
@@ -43,10 +90,14 @@ stop() ->
 init([]) ->
     {ok, #state{}}.
 
-handle_call(get_count, _From, #state{count = C} = State) ->
-    {reply, C, State};
-handle_call(report, _From, #state{count = C} = State) ->
-    {reply, ok, State#state{count = C+1}};
+handle_call(get_count, _From, #state{events = E} = State) ->
+    {reply, length(E), State};
+handle_call(get_events, _From, #state{events = E} = State) ->
+    {reply, E, State};
+handle_call({report, Event}, _From, #state{events = E} = State) ->
+    {reply, ok, State#state{events = [Event | E]}};
+handle_call(reset, _From, State) ->
+    {reply, ok, State#state{events = []}};
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 handle_call(_Request, _From, State) ->

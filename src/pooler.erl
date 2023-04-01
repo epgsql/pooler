@@ -54,6 +54,7 @@
 %% ------------------------------------------------------------------
 
 -export([init/1,
+         handle_continue/2,
          handle_call/3,
          handle_cast/2,
          handle_info/2,
@@ -326,7 +327,6 @@ call_free_members(PoolName, Fun, Timeout)
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 
--spec init(#pool{}) -> {'ok', #pool{}, 0}.
 init(#pool{}=Pool) ->
     #pool{init_count = N} = Pool,
     MemberSup = pooler_pool_sup:member_sup_name(Pool),
@@ -335,11 +335,15 @@ init(#pool{}=Pool) ->
     %% such and is otherwise a no-op.
     Pool2 = cull_members_from_pool(Pool1),
     {ok, NewPool} = init_members_sync(N, Pool2),
-    %% trigger an immediate timeout, handled by handle_info to allow
-    %% us to register with pg. We use the timeout mechanism to ensure
-    %% that a server is added to a group only when it is ready to
-    %% process messages.
-    {ok, NewPool, 0}.
+    {ok, NewPool, {continue, join_group}}.
+
+handle_continue(join_group, #pool{group = undefined} = Pool) ->
+    %% ignore
+    {noreply, Pool};
+handle_continue(join_group, #pool{group = Group} = Pool) ->
+    ok = pg_create(Group),
+    ok = pg_join(Group, self()),
+    {noreply, Pool}.
 
 set_member_sup(#pool{} = Pool, MemberSup) ->
     Pool#pool{member_sup = MemberSup}.
@@ -377,13 +381,6 @@ handle_info({requestor_timeout, From}, Pool = #pool{ queued_requestors = Request
                                     true
                             end, RequestorQueue),
     {noreply, Pool#pool{ queued_requestors = NewQueue} };
-handle_info(timeout, #pool{group = undefined} = Pool) ->
-    %% ignore
-    {noreply, Pool};
-handle_info(timeout, #pool{group = Group} = Pool) ->
-    ok = pg_create(Group),
-    ok = pg_join(Group, self()),
-    {noreply, Pool};
 handle_info({'DOWN', MRef, process, Pid, Reason}, State) ->
     State1 =
         case dict:find(Pid, State#pool.all_members) of
