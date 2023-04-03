@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("../src/pooler.hrl").
 
--compile([export_all]).
+-export([sleep_for_configured_timeout/0]).
 
 % The `user' processes represent users of the pooler library.  A user
 % process will take a pid, report details on the pid it has, release
@@ -56,35 +56,35 @@ user_loop(MyTC) ->
 % They have a type and an ID and can report their type and ID and
 % stop.
 
-tc_loop({Type, Id}) ->
-    receive
-        {get_id, From} ->
-            From ! {ok, Type, Id},
-            tc_loop({Type, Id});
-        stop -> stopped;
-        crash ->
-            erlang:error({tc_loop, kaboom})
-    end.
+%% tc_loop({Type, Id}) ->
+%%     receive
+%%         {get_id, From} ->
+%%             From ! {ok, Type, Id},
+%%             tc_loop({Type, Id});
+%%         stop -> stopped;
+%%         crash ->
+%%             erlang:error({tc_loop, kaboom})
+%%     end.
 
-get_tc_id(Pid) ->
-    Pid ! {get_id, self()},
-    receive
-        {ok, Type, Id} ->
-            {Type, Id}
-    after 200 ->
-            timeout
-    end.
+%% get_tc_id(Pid) ->
+%%     Pid ! {get_id, self()},
+%%     receive
+%%         {ok, Type, Id} ->
+%%             {Type, Id}
+%%     after 200 ->
+%%             timeout
+%%     end.
 
-stop_tc(Pid) ->
-    Pid ! stop.
+%% stop_tc(Pid) ->
+%%     Pid ! stop.
 
-tc_starter(Type) ->
-    Ref = make_ref(),
-    spawn_link(fun() -> tc_loop({Type, Ref}) end).
+%% tc_starter(Type) ->
+%%     Ref = make_ref(),
+%%     spawn_link(fun() -> tc_loop({Type, Ref}) end).
 
-assert_tc_valid(Pid) ->
-    ?assertMatch({_Type, _Ref}, get_tc_id(Pid)),
-    ok.
+%% assert_tc_valid(Pid) ->
+%%     ?assertMatch({_Type, _Ref}, get_tc_id(Pid)),
+%%     ok.
 
 % tc_sanity_test() ->
 %     Pid1 = tc_starter("1"),
@@ -105,15 +105,21 @@ assert_tc_valid(Pid) ->
 pooler_basics_via_config_test_() ->
     {setup,
      fun() ->
+             {ok, _} = error_logger_mon:start_link(),
+             error_logger_mon:install_handler(pooler),
+             logger:set_handler_config(default, filters, []),
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link()
      end,
      fun(_X) ->
+             error_logger_mon:uninstall_handler(),
+             ok = error_logger_mon:stop(),
              fake_metrics:stop()
      end,
     {foreach,
      % setup
      fun() ->
+             error_logger_mon:reset(),
              Pools = [[{name, test_pool_1},
                        {max_count, 3},
                        {init_count, 2},
@@ -121,7 +127,6 @@ pooler_basics_via_config_test_() ->
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler)
      end,
      fun(_X) ->
@@ -132,22 +137,27 @@ pooler_basics_via_config_test_() ->
 pooler_basics_dynamic_test_() ->
     {setup,
      fun() ->
+             {ok, _} = error_logger_mon:start_link(),
+             error_logger_mon:install_handler(pooler),
+             logger:set_handler_config(default, filters, []),
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link()
      end,
      fun(_X) ->
+             error_logger_mon:uninstall_handler(),
+             ok = error_logger_mon:stop(),
              fake_metrics:stop()
      end,
     {foreach,
      % setup
      fun() ->
+             error_logger_mon:reset(),
              Pool = [{name, test_pool_1},
                      {max_count, 3},
                      {init_count, 2},
                      {start_mfa,
                       {pooled_gs, start_link, [{"type-0"}]}}],
              application:unset_env(pooler, pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler),
              pooler:new_pool(Pool)
      end,
@@ -159,22 +169,27 @@ pooler_basics_dynamic_test_() ->
 pooler_basics_integration_to_other_supervisor_test_() ->
     {setup,
      fun() ->
+             {ok, _} = error_logger_mon:start_link(),
+             error_logger_mon:install_handler(pooler),
+             logger:set_handler_config(default, filters, []),
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link()
      end,
      fun(_X) ->
+             error_logger_mon:uninstall_handler(),
+             ok = error_logger_mon:stop(),
              fake_metrics:stop()
      end,
     {foreach,
      % setup
      fun() ->
+             error_logger_mon:reset(),
              Pool = [{name, test_pool_1},
                      {max_count, 3},
                      {init_count, 2},
                      {start_mfa,
                       {pooled_gs, start_link, [{"type-0"}]}}],
              application:unset_env(pooler, pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler),
              supervisor:start_link(fake_external_supervisor, Pool)
      end,
@@ -298,6 +313,17 @@ basic_tests() ->
                M = pooler:take_member(test_pool_1),
                [ pooler:return_member(test_pool_1, M)
                  || _I <- lists:seq(1, 37) ],
+               ?assertEqual(
+                  36,
+                  length(
+                    lists:filter(
+                      fun(#{msg := {report, #{label := "ignored return of free member",
+                                              pid := Pid}}}) ->
+                              Pid =:= M;
+                         (_) ->
+                              false
+                      end,
+                      error_logger_mon:get_msgs()))),
                M1 = pooler:take_member(test_pool_1),
                M2 = pooler:take_member(test_pool_1),
                ?assert(M1 =/= M2),
@@ -406,7 +432,7 @@ basic_tests() ->
 
       {"utilization returns sane results",
        fun() ->
-               #pool{max_count = MaxCount, queue_max = QueueMax} = Pool = sys:get_state(test_pool_1),
+               #pool{max_count = MaxCount, queue_max = QueueMax} = sys:get_state(test_pool_1),
 
                ?assertEqual(MaxCount, ?gv(max_count, pooler:pool_utilization(test_pool_1))),
                ?assertEqual(0, ?gv(in_use_count, pooler:pool_utilization(test_pool_1))),
@@ -419,6 +445,7 @@ basic_tests() ->
 pooler_groups_test_() ->
     {setup,
      fun() ->
+             logger:set_handler_config(default, filters, []),
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link()
      end,
@@ -449,7 +476,6 @@ pooler_groups_test_() ->
                         {pooled_gs, start_link, [{"type-3"}]}}]
                      ],
              application:set_env(pooler, pools, Pools),
-             %% error_logger:delete_report_handler(error_logger_tty_h),
              pg_start(),
              application:start(pooler)
      end,
@@ -462,16 +488,18 @@ pooler_groups_test_() ->
        fun() ->
                Types = [ begin
                              Pid = pooler:take_group_member(group_1),
+                             ?assert(is_pid(Pid), [{result, Pid}, {i, I}]),
                              {Type, _} = pooled_gs:get_id(Pid),
                              ?assertMatch("type-1" ++ _, Type),
                              ok = pooler:return_group_member(group_1, Pid, ok),
+                             timer:sleep(10),
                              Type
                          end
-                         || _I <- lists:seq(1, 50) ],
+                         || I <- lists:seq(1, 50) ],
                Type_1_1 = [ X || "type-1-1" = X <- Types ],
                Type_1_2 = [ X || "type-1-2" = X <- Types ],
-               ?assert(length(Type_1_1) > 0),
-               ?assert(length(Type_1_2) > 0)
+               ?assert(length(Type_1_1) > 0, [{types, Types}]),
+               ?assert(length(Type_1_2) > 0, [{types, Types}])
        end},
 
       {"take member from unknown group",
@@ -540,6 +568,7 @@ pooler_groups_test_() ->
        fun() ->
                ?assertEqual(ok, pooler:rm_pool(test_pool_1)),
                ?assertEqual(ok, pooler:rm_pool(test_pool_2)),
+               timer:sleep(100),  % process group de-registration is asynchronous
                ?assertEqual(error_no_members, pooler:take_group_member(group_1)),
                ?assertEqual(ok, pooler:rm_group(group_1)),
 
@@ -579,6 +608,7 @@ pooler_limit_failed_adds_test_() ->
     %% encountered while trying to add pids.
     {setup,
      fun() ->
+             logger:set_handler_config(default, filters, []),
              Pools = [[{name, test_pool_1},
                        {max_count, 10},
                        {init_count, 10},
@@ -598,6 +628,7 @@ pooler_limit_failed_adds_test_() ->
 pooler_scheduled_cull_test_() ->
     {setup,
      fun() ->
+             logger:set_handler_config(default, filters, []),
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link(),
              Pools = [[{name, test_pool_1},
@@ -607,7 +638,6 @@ pooler_scheduled_cull_test_() ->
                        {cull_interval, {200, ms}},
                        {max_age, {0, min}}]],
              application:set_env(pooler, pools, Pools),
-             %% error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler)
      end,
      fun(_X) ->
@@ -696,13 +726,13 @@ in_use_members_not_culled(Pids, N) ->
 random_message_test_() ->
     {setup,
      fun() ->
+             logger:set_handler_config(default, filters, []),
              Pools = [[{name, test_pool_1},
                        {max_count, 2},
                        {init_count, 1},
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler),
              %% now send some bogus messages
              %% do the call in a throw-away process to avoid timeout error
@@ -737,6 +767,9 @@ pooler_integration_long_init_test_() ->
     {foreach,
      % setup
      fun() ->
+             logger:set_handler_config(default, filters, []),
+             {ok, _} = error_logger_mon:start_link(),
+             error_logger_mon:install_handler(pooler),
              Pool = [{name, test_pool_1},
                        {max_count, 10},
                        {init_count, 0},
@@ -749,6 +782,8 @@ pooler_integration_long_init_test_() ->
      end,
      % cleanup
      fun(_) ->
+             error_logger_mon:uninstall_handler(),
+             ok = error_logger_mon:stop(),
              application:stop(pooler)
      end,
      %
@@ -771,7 +806,16 @@ pooler_integration_long_init_test_() ->
 
                       timer:sleep(150),
                       ?assertEqual(0, children_count(pooler_test_pool_1_member_sup)),
-                      ?assertEqual(0, starting_members(test_pool_1))
+                      ?assertEqual(0, starting_members(test_pool_1)),
+                      %% there is a log when worker start times out
+                      ?assert(lists:any(
+                                fun(#{level := error,
+                                      msg := {report, #{label := "starting member timeout",
+                                                        pool := test_pool_1}}}) ->
+                                        true;
+                                   (_) ->
+                                        false
+                                end, error_logger_mon:get_msgs()))
               end
       end
      ]
@@ -790,6 +834,7 @@ pooler_integration_queueing_test_() ->
     {foreach,
      % setup
      fun() ->
+             logger:set_handler_config(default, filters, []),
              Pool = [{name, test_pool_1},
                      {max_count, 10},
                      {queue_max, 10},
@@ -893,6 +938,7 @@ pooler_integration_queueing_return_member_test_() ->
     {foreach,
      % setup
      fun() ->
+             logger:set_handler_config(default, filters, []),
              Pool = [{name, test_pool_1},
                      {max_count, 10},
                      {queue_max, 10},
@@ -921,28 +967,32 @@ pooler_integration_queueing_return_member_test_() ->
       fun(_) ->
               fun() ->
                       application:set_env(pooler, sleep_time, 0),
+                      Parent = self(),
                       Pids = [ proc_lib:spawn_link(fun() ->
                                                Val = pooler:take_member(test_pool_1, 200),
                                                ?assert(is_pid(Val)),
+                                               Parent ! {taken, self()},
                                                receive
-                                                   _ ->
+                                                   return ->
                                                        pooler:return_member(test_pool_1, Val)
                                                    after
                                                        5000 ->
                                                            pooler:return_member(test_pool_1, Val)
-                                               end
+                                               end,
+                                               Parent ! {returned, self()}
                                        end)
                         || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
                       ],
-                      timer:sleep(1),
-                      Parent = self(),
+                      [receive {taken, Pid} -> ok end || Pid <- Pids],
+                      ?assertEqual(error_no_members, pooler:take_member(test_pool_1)),
                       proc_lib:spawn_link(fun() ->
                                              Val = pooler:take_member(test_pool_1, 200),
-                                             Parent ! Val
+                                             Parent ! {extra_result, Val}
                                      end),
                       [Pid ! return || Pid <- Pids],
+                      [receive {returned, Pid} -> ok end || Pid <- Pids],
                       receive
-                          Result ->
+                          {extra_result, Result} ->
                               ?assert(is_pid(Result)),
                               pooler:return_member(test_pool_1, Result)
                       end,
@@ -958,13 +1008,13 @@ pooler_integration_test_() ->
     {foreach,
      % setup
      fun() ->
+             logger:set_handler_config(default, filters, []),
              Pools = [[{name, test_pool_1},
                        {max_count, 10},
                        {init_count, 10},
                        {start_mfa,
                         {pooled_gs, start_link, [{"type-0"}]}}]],
              application:set_env(pooler, pools, Pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler),
              Users = [ start_user() || _X <- lists:seq(1, 10) ],
              Users
@@ -1015,6 +1065,7 @@ pooler_integration_test_() ->
 pooler_auto_grow_disabled_by_default_test_() ->
     {setup,
      fun() ->
+             logger:set_handler_config(default, filters, []),
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link()
      end,
@@ -1030,7 +1081,6 @@ pooler_auto_grow_disabled_by_default_test_() ->
                      {start_mfa,
                       {pooled_gs, start_link, [{"type-0"}]}}],
              application:unset_env(pooler, pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler),
              pooler:new_pool(Pool)
      end,
@@ -1052,6 +1102,7 @@ pooler_auto_grow_disabled_by_default_test_() ->
 pooler_auto_grow_enabled_test_() ->
     {setup,
      fun() ->
+             logger:set_handler_config(default, filters, []),
              application:set_env(pooler, metrics_module, fake_metrics),
              fake_metrics:start_link()
      end,
@@ -1068,7 +1119,6 @@ pooler_auto_grow_enabled_test_() ->
                      {start_mfa,
                       {pooled_gs, start_link, [{"type-0"}]}}],
              application:unset_env(pooler, pools),
-             error_logger:delete_report_handler(error_logger_tty_h),
              application:start(pooler),
              pooler:new_pool(Pool)
      end,
@@ -1090,6 +1140,7 @@ pooler_auto_grow_enabled_test_() ->
 pooler_custom_stop_mfa_test_() ->
     {foreach,
      fun() ->
+             logger:set_handler_config(default, filters, []),
              Pool = [{name, test_pool_1},
                      {max_count, 3},
                      {init_count, 2},
@@ -1124,6 +1175,7 @@ no_error_logger_reports_after_culling_test_() ->
     %% damn those wraiths! This is the cure
     {foreach,
      fun() ->
+             logger:set_handler_config(default, filters, []),
              {ok, _Pid} = error_logger_mon:start_link(),
              Pool = [{name, test_pool_1},
                      {max_count, 3},
@@ -1135,7 +1187,7 @@ no_error_logger_reports_after_culling_test_() ->
      end,
      fun(_) ->
              ok = error_logger_mon:stop(),
-             error_logger:delete_report_handler(error_logger_pooler_h),
+             error_logger_mon:uninstall_handler(),
              application:unset_env(pooler, pools)
      end,
      [
@@ -1145,21 +1197,24 @@ no_error_logger_reports_after_culling_test_() ->
                Stop = {stop_mfa, {erlang, exit, ['$pooler_pid', kill]}},
                application:set_env(pooler, pools, [[Stop | Pool]]),
                ok = application:start(pooler),
-               error_logger:add_report_handler(error_logger_pooler_h),
+               error_logger_mon:install_handler(),
+               error_logger_mon:reset(),
                Reason = monitor_members_trigger_culling_and_return_reason(),
                %% we need to wait for the message to arrive before deleting handler
                timer:sleep(250),
-               error_logger:delete_report_handler(error_logger_pooler_h),
+               error_logger_mon:uninstall_handler(),
                ok = application:stop(pooler),
                ?assertEqual(killed, Reason),
-               ?assertEqual(1, error_logger_mon:get_msg_count())
+               ?assertEqual(1, error_logger_mon:get_msg_count(),
+                            [{msgs, error_logger_mon:get_msgs()},
+                             {m, [R || #{msg := {report, R}} <- error_logger_mon:get_msgs()]}])
        end},
       {"Default MFA shouldn't generate any reports during culling",
        fun() ->
                ok = application:start(pooler),
-               error_logger:add_report_handler(error_logger_pooler_h),
+               error_logger_mon:install_handler(),
                Reason = monitor_members_trigger_culling_and_return_reason(),
-               error_logger:delete_report_handler(error_logger_pooler_h),
+               error_logger_mon:uninstall_handler(),
                ok = application:stop(pooler),
                ?assertEqual(killed, Reason),
                ?assertEqual(0, error_logger_mon:get_msg_count())
