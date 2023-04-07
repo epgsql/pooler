@@ -1,12 +1,11 @@
-{application, pooler,
- [
-  {description, "An OTP Process Pool Application"},
-  {vsn, git},
-  {registered, []},
-  {applications, [
-                  kernel,
-                  stdlib
-                 ]},
-  {mod, { pooler_app, []}},
-  {env, []}
- ]}.
+{application, pooler, [
+    {description, "An OTP Process Pool Application"},
+    {vsn, git},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib
+    ]},
+    {mod, {pooler_app, []}},
+    {env, []}
+]}.

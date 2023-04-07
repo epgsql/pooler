@@ -16,32 +16,38 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/1,
-         get_id/1,
-         ping/1,
-         ping_count/1,
-         crash/1,
-         error_on_call/1,
-         do_work/2,
-         stop/1
-        ]).
+-export([
+    start_link/1,
+    get_id/1,
+    ping/1,
+    ping_count/1,
+    crash/1,
+    error_on_call/1,
+    do_work/2,
+    stop/1
+]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
 %% ------------------------------------------------------------------
 
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+-export([
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3
+]).
 
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
 
-start_link(Args ={_Type}) ->
+start_link(Args = {_Type}) ->
     % not registered
     gen_server:start_link(?MODULE, Args, []);
-
-start_link(Args ={_Type, _InitFun}) ->
+start_link(Args = {_Type, _InitFun}) ->
     % not registered
     gen_server:start_link(?MODULE, Args, []).
 
@@ -77,10 +83,10 @@ stop(S) ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 -record(state, {
-          type = "" :: string(),
-          id :: reference(),
-          ping_count = 0 :: non_neg_integer()
-         }).
+    type = "" :: string(),
+    id :: reference(),
+    ping_count = 0 :: non_neg_integer()
+}).
 
 init({Type}) ->
     {ok, #state{type = Type, id = make_ref()}};
@@ -88,18 +94,16 @@ init({Type, StartFun}) ->
     StartFun(),
     {ok, #state{type = Type, id = make_ref()}}.
 
-
-
 handle_call(get_id, _From, State) ->
     {reply, {State#state.type, State#state.id}, State};
 handle_call({do_work, T}, _From, State) ->
     Sleep = rand:uniform(T),
     timer:sleep(Sleep),
     {reply, {ok, Sleep}, State};
-handle_call(ping, _From, #state{ping_count = C } = State) ->
+handle_call(ping, _From, #state{ping_count = C} = State) ->
     State1 = State#state{ping_count = C + 1},
     {reply, pong, State1};
-handle_call(ping_count, _From, #state{ping_count = C } = State) ->
+handle_call(ping_count, _From, #state{ping_count = C} = State) ->
     {reply, C, State};
 handle_call(error_on_call, _From, _State) ->
     erlang:error({pooled_gs, requested_error});
@@ -121,4 +125,3 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
