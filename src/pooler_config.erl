@@ -8,7 +8,7 @@
 
 -include("pooler.hrl").
 
--spec list_to_pool([{atom(), term()}]) -> #pool{}.
+-spec list_to_pool(pooler:pool_config()) -> #pool{}.
 list_to_pool(P) ->
     #pool{
         name = req(name, P),

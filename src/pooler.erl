@@ -40,6 +40,7 @@
     take_group_member/1,
     return_group_member/2,
     return_group_member/3,
+    group_pools/1,
     return_member/2,
     return_member/3,
     pool_stats/1,
@@ -66,6 +67,31 @@
     terminate/2,
     code_change/3
 ]).
+
+%% ------------------------------------------------------------------
+%% Types
+%% ------------------------------------------------------------------
+-export_type([pool_config/0, pool_name/0, group_name/0]).
+
+-type pool_name() :: atom().
+-type group_name() :: atom().
+
+-type pool_config() :: [
+    {name, pool_name()}
+    | {init_count, non_neg_integer()}
+    | {max_count, non_neg_integer()}
+    | {start_mfa, {module(), atom(), [any()]}}
+    | {group, group_name()}
+    | {cull_interval, time_spec()}
+    | {max_age, time_spec()}
+    | {member_start_timeout, time_spec()}
+    | {queue_max, non_neg_integer()}
+    | {metrics_api, folsom | exometer}
+    | {metrics_mod, module()}
+    | {stop_mfa, {module(), atom(), ['$pooler_pid' | any(), ...]}}
+    | {auto_grow_threshold, non_neg_integer()}
+    | {add_member_retry, non_neg_integer()}
+].
 
 %% ------------------------------------------------------------------
 %% Application API
@@ -136,10 +162,12 @@ manual_start() ->
 %% <dd>Time limit for member starts. Specified as `{Time,
 %% Unit}'. Defaults to `{1, min}'.</dd>
 %% </dl>
+-spec new_pool(pool_config()) -> {ok, pid()} | {error, {already_started, pid()}}.
 new_pool(PoolConfig) ->
     pooler_sup:new_pool(PoolConfig).
 
 %% @doc Terminate the named pool.
+-spec rm_pool(pool_name()) -> ok | {error, not_found | running | restarting}.
 rm_pool(PoolName) ->
     pooler_sup:rm_pool(PoolName).
 
@@ -152,7 +180,7 @@ rm_pool(PoolName) ->
 %% The group is NOT terminated if any member pool did not
 %% successfully terminate.
 %%
--spec rm_group(atom()) -> ok | {error, {failed_rm_pools, [atom()]}}.
+-spec rm_group(group_name()) -> ok | {error, {failed_rm_pools, [atom()]}}.
 rm_group(GroupName) ->
     Pools = pg_get_local_members(GroupName),
     case rm_group_members(Pools) of
@@ -180,7 +208,7 @@ rm_group_members(MemberPids) ->
 %% @doc Get child spec described by the proplist `PoolConfig'.
 %%
 %% See {@link pooler:new_pool/1} for info about `PoolConfig'.
--spec pool_child_spec([{atom(), term()}]) -> supervisor:child_spec().
+-spec pool_child_spec(pool_config()) -> supervisor:child_spec().
 pool_child_spec(PoolConfig) ->
     pooler_sup:pool_child_spec(PoolConfig).
 
@@ -193,7 +221,7 @@ accept_member(PoolName, MemberPid) ->
 %%
 %% If no free members are available, 'error_no_members' is returned.
 %%
--spec take_member(atom() | pid()) -> pid() | error_no_members.
+-spec take_member(pool_name() | pid()) -> pid() | error_no_members.
 take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
     gen_server:call(PoolName, {take_member, 0}, infinity).
 
@@ -204,7 +232,7 @@ take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
 %% is available within the specified timeout, error_no_members is returned.
 %% `Timeout' can be either milliseconds as integer or `{duration, time_unit}'
 %%
--spec take_member(atom() | pid(), non_neg_integer() | time_spec()) -> pid() | error_no_members.
+-spec take_member(pool_name() | pid(), non_neg_integer() | time_spec()) -> pid() | error_no_members.
 take_member(PoolName, Timeout) when is_atom(PoolName) orelse is_pid(PoolName) ->
     gen_server:call(PoolName, {take_member, time_as_millis(Timeout)}, infinity).
 
@@ -212,7 +240,7 @@ take_member(PoolName, Timeout) when is_atom(PoolName) orelse is_pid(PoolName) ->
 %% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
 %% members are available in the randomly chosen pool, all other pools
 %% in the group are tried in order.
--spec take_group_member(atom()) -> pid() | error_no_members.
+-spec take_group_member(group_name()) -> pid() | error_no_members.
 take_group_member(GroupName) ->
     case pg_get_local_members(GroupName) of
         [] ->
@@ -252,7 +280,7 @@ extract_nth(_, [], _) ->
 %% @doc Return a member that was taken from the group
 %% `GroupName'. This is a convenience function for
 %% `return_group_member/3' with `Status' of `ok'.
--spec return_group_member(atom(), pid() | error_no_members) -> ok.
+-spec return_group_member(group_name(), pid() | error_no_members) -> ok.
 return_group_member(GroupName, MemberPid) ->
     return_group_member(GroupName, MemberPid, ok).
 
@@ -260,7 +288,7 @@ return_group_member(GroupName, MemberPid) ->
 %% `Status' is `ok' the member is returned to the pool from which is
 %% came. If `Status' is `fail' the member will be terminated and a new
 %% member added to the appropriate pool.
--spec return_group_member(atom(), pid() | error_no_members, ok | fail) -> ok.
+-spec return_group_member(group_name(), pid() | error_no_members, ok | fail) -> ok.
 return_group_member(_, error_no_members, _) ->
     ok;
 return_group_member(_GroupName, MemberPid, Status) when is_pid(MemberPid) ->
@@ -276,7 +304,7 @@ return_group_member(_GroupName, MemberPid, Status) when is_pid(MemberPid) ->
 %% If `Status' is 'ok', the member is returned to the pool.  If
 %% `Status' is 'fail', the member is destroyed and a new member is
 %% added to the pool in its place.
--spec return_member(atom() | pid(), pid() | error_no_members, ok | fail) -> ok.
+-spec return_member(pool_name() | pid(), pid() | error_no_members, ok | fail) -> ok.
 return_member(PoolName, Pid, Status) when
     is_pid(Pid) andalso
         (is_atom(PoolName) orelse
@@ -291,7 +319,7 @@ return_member(_, error_no_members, _) ->
 
 %% @doc Return a member to the pool so it can be reused.
 %%
--spec return_member(atom() | pid(), pid() | error_no_members) -> ok.
+-spec return_member(pool_name() | pid(), pid() | error_no_members) -> ok.
 return_member(PoolName, Pid) when
     is_pid(Pid) andalso
         (is_atom(PoolName) orelse is_pid(PoolName))
@@ -301,24 +329,37 @@ return_member(PoolName, Pid) when
 return_member(_, error_no_members) ->
     ok.
 
-%% @doc Obtain runtime state info for all pools.
+%% @doc Obtain runtime state info for all workers.
 %%
 %% Format of the return value is subject to change.
--spec pool_stats(atom() | pid()) -> [tuple()].
+-spec pool_stats(pool_name() | pid()) -> [{pid(), {reference(), free | pid(), erlang:timestamp()}}].
 pool_stats(PoolName) ->
     gen_server:call(PoolName, pool_stats).
+
+%% @doc Obtain the pids of all pools which are members of the group.
+-spec group_pools(group_name()) -> [pid()].
+group_pools(GroupName) ->
+    pg_get_local_members(GroupName).
 
 %% @doc Obtain utilization info for a pool.
 %%
 %% Format of the return value is subject to change, but for now it
 %% will be a proplist to maintain backcompat with R16.
--spec pool_utilization(atom() | pid()) -> [{atom(), integer()}].
+-spec pool_utilization(pool_name() | pid()) ->
+    [
+        {max_count, pos_integer()}
+        | {in_use_count, non_neg_integer()}
+        | {free_count, non_neg_integer()}
+        | {starting_count, non_neg_integer()}
+        | {queued_count, non_neg_integer()}
+        | {queue_max, non_neg_integer()}
+    ].
 pool_utilization(PoolName) ->
     gen_server:call(PoolName, pool_utilization).
 
 %% @doc Invokes `Fun' with arity 1 over all free members in pool with `PoolName'.
 %%
--spec call_free_members(atom() | pid(), fun((pid()) -> term())) -> Res when
+-spec call_free_members(pool_name() | pid(), fun((pid()) -> term())) -> Res when
     Res :: [{ok, term()} | {error, term()}].
 call_free_members(PoolName, Fun) when
     (is_atom(PoolName) orelse is_pid(PoolName)) andalso is_function(Fun, 1)
@@ -327,7 +368,7 @@ call_free_members(PoolName, Fun) when
 
 %% @doc Invokes `Fun' with arity 1 over all free members in pool with `PoolName'.
 %% `Timeout' sets the timeout of gen_server call.
--spec call_free_members(atom() | pid(), Fun, timeout()) -> Res when
+-spec call_free_members(pool_name() | pid(), Fun, timeout()) -> Res when
     Fun :: fun((pid()) -> term()),
     Res :: [{ok, term()} | {error, term()}].
 call_free_members(PoolName, Fun, Timeout) when
@@ -1109,6 +1150,7 @@ compute_utilization(#pool{
     max_count = MaxCount,
     in_use_count = InUseCount,
     free_count = FreeCount,
+    starting_members = Starting,
     queued_requestors = Queue,
     queue_max = QueueMax
 }) ->
@@ -1116,6 +1158,7 @@ compute_utilization(#pool{
         {max_count, MaxCount},
         {in_use_count, InUseCount},
         {free_count, FreeCount},
+        {starting_count, length(Starting)},
         %% Note not O(n), so in pathological cases this might be expensive
         {queued_count, queue:len(Queue)},
         {queue_max, QueueMax}

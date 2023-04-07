@@ -309,10 +309,13 @@ pooler_NAME_pool_sup:      all_for_one
 pooler_NAME_member_sup:    simple_one_for_one
 pooler_starter_sup:        simple_one_for_one
 
-Groups of pools are managed using the pg2 application. This imposes a
+Groups of pools are managed using the ~pg~ (OTP-23+) or ~pg2~ (OTP below 23) application. This imposes a
 requirement to set a configuration parameter on the kernel application
 in an OTP release. Like this in sys.config:
 #+begin_src erlang
+% OTP_RELEASE >= 23
+{kernel, [{start_pg, true}]}
+% OTP_RELEASE < 23
 {kernel, [{start_pg2, true}]}
 #+end_src
 

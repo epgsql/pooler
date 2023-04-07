@@ -47,7 +47,13 @@ jobs:
         run: make format_check
 
       - name: Eunit test
-        run: make test
+        run: make eunit
+
+      - name: Proper test
+        run: make proper
+
+      - name: Check coverage
+        run: make cover
 
       - name: Generate docs
         run: make doc
