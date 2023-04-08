@@ -12,22 +12,26 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/2,
-         start_member/1,
-         start_member/2,
-         stop_member_async/1,
-         stop/1]).
+-export([
+    start_link/2,
+    start_member/1,
+    start_member/2,
+    stop_member_async/1,
+    stop/1
+]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
 %% ------------------------------------------------------------------
 
--export([init/1,
-         handle_call/3,
-         handle_cast/2,
-         handle_info/2,
-         terminate/2,
-         code_change/3]).
+-export([
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3
+]).
 
 %% ------------------------------------------------------------------
 %% API Function Definitions
@@ -79,9 +83,11 @@ stop_member_async(Pid) ->
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
--record(starter, {pool :: #pool{},
-                  parent :: pid() | atom(),
-                  msg :: term()}).
+-record(starter, {
+    pool :: #pool{},
+    parent :: pid() | atom(),
+    msg :: term()
+}).
 
 -spec init({#pool{}, pid() | atom()}) -> {'ok', #starter{}, 0}.
 init({Pool, Parent}) ->
@@ -97,24 +103,22 @@ handle_cast(stop_member, #starter{msg = {_Me, Pid}, pool = #pool{member_sup = Me
     %% Cleanup the process and stop normally.
     supervisor:terminate_child(MemberSup, Pid),
     {stop, normal, State};
-
 handle_cast(accept_member, #starter{msg = Msg, parent = Parent, pool = #pool{name = PoolName}} = State) ->
     %% Process creation has succeeded. Send the member to the pooler
     %% gen_server to be accepted. Pooler gen_server will notify
     %% us if the member was accepted or needs to cleaned up.
     send_accept_member(Parent, PoolName, Msg),
     {noreply, State};
-
 handle_cast(stop, State) ->
     {stop, normal, State};
-
-
 handle_cast(_Request, State) ->
     {noreply, State}.
 
 -spec handle_info(_, _) -> {'noreply', _}.
-handle_info(timeout,
-            #starter{pool = Pool} = State) ->
+handle_info(
+    timeout,
+    #starter{pool = Pool} = State
+) ->
     Msg = do_start_member(Pool),
     accept_member_async(self()),
     {noreply, State#starter{msg = Msg}};
@@ -134,10 +138,14 @@ do_start_member(#pool{member_sup = PoolSup, name = PoolName}) ->
         {ok, Pid} ->
             {self(), Pid};
         Error ->
-            ?LOG_ERROR(#{label => "failed to start member",
-                         pool => PoolName,
-                         error => Error},
-                       #{domain => [pooler]}),
+            ?LOG_ERROR(
+                #{
+                    label => "failed to start member",
+                    pool => PoolName,
+                    error => Error
+                },
+                #{domain => [pooler]}
+            ),
             {self(), Error}
     end.
 

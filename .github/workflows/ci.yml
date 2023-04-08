@@ -43,6 +43,9 @@ jobs:
         run: make xref
         if: ${{ matrix.otp != '23.3' }}
 
+      - name: Code formatter validation
+        run: make format_check
+
       - name: Eunit test
         run: make test
 

@@ -7,4 +7,4 @@
 -export([init/1]).
 
 init(Pool) ->
-	{ok, {{one_for_one, 1, 1}, [pooler:pool_child_spec(Pool)]}}.
+    {ok, {{one_for_one, 1, 1}, [pooler:pool_child_spec(Pool)]}}.

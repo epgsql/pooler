@@ -12,24 +12,30 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/0,
-         report/1,
-         get_msg_count/0,
-         get_msgs/0,
-         reset/0,
-         stop/0,
-         install_handler/0,
-         install_handler/1,
-         uninstall_handler/0
-        ]).
+-export([
+    start_link/0,
+    report/1,
+    get_msg_count/0,
+    get_msgs/0,
+    reset/0,
+    stop/0,
+    install_handler/0,
+    install_handler/1,
+    uninstall_handler/0
+]).
 
 %% OTP logger
 -export([log/2]).
 
 %% gen_server
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
-
+-export([
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3
+]).
 
 %% Logger handler
 
@@ -64,17 +70,19 @@ install_handler() ->
 
 install_handler(FilterName) ->
     logger:add_handler(
-      ?MODULE,
-      ?MODULE,
-      #{level => all,
-        filter_default => stop,
-        filters => [{FilterName, filter(FilterName)}]}).
+        ?MODULE,
+        ?MODULE,
+        #{
+            level => all,
+            filter_default => stop,
+            filters => [{FilterName, filter(FilterName)}]
+        }
+    ).
 
 filter(error_logger) ->
     {fun error_logger_filter/2, []};
 filter(pooler) ->
     {fun logger_filters:domain/2, {log, sub, [pooler]}}.
-
 
 uninstall_handler() ->
     logger:remove_handler(?MODULE).

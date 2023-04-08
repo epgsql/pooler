@@ -18,6 +18,12 @@ test: $(REBAR)
 xref: $(REBAR)
 	$(REBAR) xref
 
+format: $(REBAR)
+	$(REBAR) fmt
+
+format_check: $(REBAR)
+	$(REBAR) fmt --check
+
 doc: $(REBAR)
 	$(REBAR) as dev edoc
 
