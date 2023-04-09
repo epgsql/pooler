@@ -39,6 +39,7 @@
     cull_interval = ?DEFAULT_CULL_INTERVAL :: time_spec(),
     %% The maximum age for members.
     max_age = ?DEFAULT_MAX_AGE :: time_spec(),
+    cull_timer :: reference() | undefined,
 
     %% The supervisor used to start new members
     member_sup :: atom() | pid(),
