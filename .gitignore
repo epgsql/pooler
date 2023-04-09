@@ -24,5 +24,6 @@ doc/*.html
 doc/*.md
 bench/tests
 bench/deps
+erlang_ls.config
 
 /rebar3

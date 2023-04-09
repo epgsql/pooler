@@ -533,7 +533,7 @@ pooler_groups_test_() ->
 
                 {"take member from empty group", fun() ->
                     %% artificially empty group member list
-                    [pg_leave(group_1, M) || M <- pg_get_members(group_1)],
+                    [pg_leave(group_1, M) || M <- pooler:group_pools(group_1)],
                     ?assertEqual(error_no_members, pooler:take_group_member(group_1))
                 end},
 
@@ -1452,9 +1452,6 @@ pg_stop() ->
 pg_leave(Group, Pid) ->
     pg:leave(Group, Pid).
 
-pg_get_members(Group) ->
-    pg:get_members(Group).
-
 -else.
 
 pg_start() ->
@@ -1465,8 +1462,5 @@ pg_stop() ->
 
 pg_leave(Group, Pid) ->
     pg2:leave(Group, Pid).
-
-pg_get_members(Group) ->
-    pg2:get_members(Group).
 
 -endif.

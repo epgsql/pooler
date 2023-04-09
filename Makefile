@@ -11,9 +11,16 @@ compile: $(REBAR)
 run: $(REBAR)
 	@$(REBAR) as test shell --apps pooler --config config/demo.config
 
-test: $(REBAR)
+eunit: $(REBAR)
 	$(REBAR) eunit --verbose --cover
+
+proper: $(REBAR)
+	$(REBAR) proper --cover
+
+cover: $(REBAR)
 	$(REBAR) cover --verbose --min_coverage $(MINIMAL_COVERAGE)
+
+test: eunit proper cover
 
 xref: $(REBAR)
 	$(REBAR) xref
