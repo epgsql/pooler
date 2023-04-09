@@ -9,13 +9,6 @@
 -define(POOLER_PID, '$pooler_pid').
 -define(DEFAULT_STOP_MFA, {supervisor, terminate_child, [?POOLER_POOL_NAME, ?POOLER_PID]}).
 
--type member_info() :: {string(), free | pid(), {_, _, _}}.
--type free_member_info() :: {string(), free, {_, _, _}}.
--type time_unit() :: min | sec | ms | mu.
--type time_spec() :: {non_neg_integer(), time_unit()}.
-
--type p_requestor_queue() :: queue:queue({{pid(), _}, timer:tref()}).
-
 -record(pool, {
     name :: atom(),
     group :: atom(),
@@ -36,9 +29,9 @@
     %% The interval to schedule a cull message. Both
     %% 'cull_interval' and 'max_age' are specified using a
     %% `time_spec()' type.
-    cull_interval = ?DEFAULT_CULL_INTERVAL :: time_spec(),
+    cull_interval = ?DEFAULT_CULL_INTERVAL :: pooler:time_spec(),
     %% The maximum age for members.
-    max_age = ?DEFAULT_MAX_AGE :: time_spec(),
+    max_age = ?DEFAULT_MAX_AGE :: pooler:time_spec(),
     cull_timer :: reference() | undefined,
 
     %% The supervisor used to start new members
@@ -55,13 +48,13 @@
     %% an Erlang timestamp that records when the member became
     %% free.
 
-    all_members = dict:new() :: dict:dict(),
+    all_members = #{} :: pooler:members_map(),
 
     %% Maps consumer pid to a tuple of the form:
     %% {MonitorRef, MemberList} where MonitorRef is a monitor
     %% reference for the consumer and MemberList is a list of
     %% members being consumed.
-    consumer_to_pid = dict:new() :: dict:dict(),
+    consumer_to_pid = #{} :: pooler:consumers_map(),
 
     %% A list of `{References, Timestamp}' tuples representing
     %% new member start requests that are in-flight. The
@@ -70,7 +63,7 @@
     starting_members = [] :: [{reference(), erlang:timestamp()}],
 
     %% The maximum amount of time to allow for member start.
-    member_start_timeout = ?DEFAULT_MEMBER_START_TIMEOUT :: time_spec(),
+    member_start_timeout = ?DEFAULT_MEMBER_START_TIMEOUT :: pooler:time_spec(),
 
     %% The optional threshold at which more members will be started if
     %% free_count drops to this value.  Normally undefined, but may be
@@ -93,7 +86,7 @@
     metrics_api = folsom :: 'folsom' | 'exometer',
 
     %% A queue of requestors for blocking take member requests
-    queued_requestors = queue:new() :: p_requestor_queue(),
+    queued_requestors = queue:new() :: pooler:requestor_queue(),
     %% The max depth of the queue
     queue_max = 50 :: non_neg_integer()
 }).
