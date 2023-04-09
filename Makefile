@@ -6,7 +6,7 @@ MINIMAL_COVERAGE=80
 all: compile
 
 compile: $(REBAR)
-	$(REBAR) as dev compile
+	$(REBAR) compile
 
 run: $(REBAR)
 	@$(REBAR) as test shell --apps pooler --config config/demo.config
@@ -32,15 +32,15 @@ format_check: $(REBAR)
 	$(REBAR) fmt --check
 
 doc: $(REBAR)
-	$(REBAR) as dev edoc
+	$(REBAR) edoc
 
 clean: $(REBAR)
-	$(REBAR) as dev clean
+	$(REBAR) clean
 	$(REBAR) as test clean
 	@rm -rf ./erl_crash.dump
 
 dialyzer: $(REBAR)
-	$(REBAR) as dev dialyzer
+	$(REBAR) dialyzer
 
 # Get rebar3 if it doesn't exist. If rebar3 was found on PATH, the
 # $(REBAR) dep will be satisfied since the file will exist.
