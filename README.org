@@ -319,6 +319,34 @@ in an OTP release. Like this in sys.config:
 {kernel, [{start_pg2, true}]}
 #+end_src
 
+** Contribute
+
+All contributions are welcome!
+
+Pooler uses ~rebar3 fmt~ code formatter. Please make sure to apply ~make format~ before committing any code.
+
+In ~pooler~ we are trying to maintain high test coverage. Run ~make test~ to ensure code coverage does not
+fall below a threshold (it is automatically validated).
+
+Pooler is quite critical to performance regressions. We do not run benchmarks in CI, so, to make sure your
+change does not make pooler slower, please run the benchmarks before and after your changes and make
+sure there are no major regressions on the most recent OTP release. The workflow is:
+
+#+begin_src bash
+$ git checkout master
+$ rebar3 bench --save-baseline master  # run benchmarks, save results to `master` file
+$ git checkout -b <my feature branch>
+
+# <do your code changes>
+
+$ rebar3 bench --baseline master  # run benchmarks on updated code, compare results with `master` results
+$ git commit ... && git push ...
+#+end_src
+
+Please attach the output of ~rebar3 bench --baseline master~ after your changes to the PR description
+in order to prove that there were no performance regressions. Please attach the OTP version you run the
+benchmarks on.
+
 ** License
 Pooler is licensed under the Apache License Version 2.0.  See the
 [[file:LICENSE][LICENSE]] file for details.

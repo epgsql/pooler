@@ -944,15 +944,19 @@ cull_members_from_pool(#pool{init_count = C, max_count = C} = Pool) ->
     Pool;
 cull_members_from_pool(
     #pool{
-        name = PoolName,
         free_count = FreeCount,
         init_count = InitCount,
         in_use_count = InUseCount,
         cull_interval = Delay,
+        cull_timer = CullTRef,
         max_age = MaxAge,
         all_members = AllMembers
     } = Pool
 ) ->
+    case is_reference(CullTRef) of
+        true -> erlang:cancel_timer(CullTRef);
+        false -> noop
+    end,
     MaxCull = FreeCount - (InitCount - InUseCount),
     Pool1 =
         case MaxCull > 0 of
@@ -969,22 +973,19 @@ cull_members_from_pool(
             false ->
                 Pool
         end,
-    schedule_cull(PoolName, Delay),
-    Pool1.
+    Pool1#pool{cull_timer = schedule_cull(self(), Delay)}.
 
 -spec schedule_cull(
-    PoolName :: atom() | pid(),
+    Pool :: atom() | pid(),
     Delay :: time_spec()
 ) -> reference().
 %% @doc Schedule a pool cleaning or "cull" for `PoolName' in which
 %% members older than `max_age' will be removed until the pool has
 %% `init_count' members. Uses `erlang:send_after/3' for light-weight
 %% timer that will be auto-cancelled upon pooler shutdown.
-schedule_cull(PoolName, Delay) ->
+schedule_cull(Pool, Delay) ->
     DelayMillis = time_as_millis(Delay),
-    %% use pid instead of server name atom to take advantage of
-    %% automatic cancelling
-    erlang:send_after(DelayMillis, PoolName, cull_pool).
+    erlang:send_after(DelayMillis, Pool, cull_pool).
 
 -spec member_info([pid()], dict:dict()) -> [{pid(), member_info()}].
 member_info(Pids, AllMembers) ->
