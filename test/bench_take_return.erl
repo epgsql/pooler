@@ -14,7 +14,9 @@
     size_500_clients_50_take_return_all/1,
     bench_size_500_clients_50_take_return_all/2,
     size_0_max_500_take_return_all/1,
-    bench_size_0_max_500_take_return_all/2
+    bench_size_0_max_500_take_return_all/2,
+    size_0_max_500_clients_50_take_return_all/1,
+    bench_size_0_max_500_clients_50_take_return_all/2
 ]).
 
 %% @doc Pool of fixed size 5 - try to take just one member and instantly return
@@ -102,9 +104,9 @@ size_500_clients_50_take_return_all(init) ->
     PerClient = PoolSize div NumClients,
     start_fixed(?FUNCTION_NAME, 500),
     Clients = [
-        erlang:spawn(
+        erlang:spawn_link(
             fun() ->
-                client(?FUNCTION_NAME, PerClient)
+                client(?FUNCTION_NAME, 0, PerClient)
             end
         )
      || _ <- lists:seq(1, NumClients)
@@ -113,7 +115,13 @@ size_500_clients_50_take_return_all(init) ->
 size_500_clients_50_take_return_all({input, {_Pool, _Size, _Clients}}) ->
     [];
 size_500_clients_50_take_return_all({stop, {PoolName, _Size, Clients}}) ->
-    [exit(Pid, shutdown) || Pid <- Clients],
+    [
+        begin
+            unlink(Pid),
+            exit(Pid, shutdown)
+        end
+     || Pid <- Clients
+    ],
     stop(PoolName).
 
 bench_size_500_clients_50_take_return_all(_Input, {_PoolName, _Size, Clients}) ->
@@ -132,7 +140,7 @@ bench_size_500_clients_50_take_return_all(_Input, {_PoolName, _Size, Clients}) -
         Clients
     ).
 
-%% @doc Artificial example: pool with init_count=500, max_count=500 that is culled to 0 on each iteration.
+%% @doc Artificial example: pool with init_count=0, max_count=500 that is culled to 0 on each iteration.
 %% Try to take 500 workers sequentially and instantly return them (and trigger culling).
 %% This benchmark, while is quite unrealistic (why have pool that instantly kills workers), but it
 %% helps to test worker spawn/kill routines.
@@ -153,6 +161,62 @@ size_0_max_500_take_return_all({stop, {PoolName, _}}) ->
 bench_size_0_max_500_take_return_all(_Input, {PoolName, Size}) ->
     Members = take_n(PoolName, 500, Size),
     [pooler:return_member(PoolName, Member) || Member <- Members],
+    whereis(PoolName) ! cull_pool,
+    Utilization = pooler:pool_utilization(PoolName),
+    0 = proplists:get_value(free_count, Utilization),
+    0 = proplists:get_value(in_use_count, Utilization).
+
+%% @doc Pool with init_count=0, max_count=500 that is culled to 0 on each iteration, taken by 50 workers
+%%
+%% Artificial example (because pool is instantly culled), but with parallel consumers we can test concurrent
+%% pool worker starter
+size_0_max_500_clients_50_take_return_all(init) ->
+    PoolSize = 500,
+    NumClients = 50,
+    PerClient = PoolSize div NumClients,
+    start([
+        {name, ?FUNCTION_NAME},
+        {init_count, 0},
+        {max_count, PoolSize},
+        {max_age, {0, sec}},
+        {queue_max, 500}
+    ]),
+    Clients = [
+        erlang:spawn_link(
+            fun() ->
+                client(?FUNCTION_NAME, 500, PerClient)
+            end
+        )
+     || _ <- lists:seq(1, NumClients)
+    ],
+    {?FUNCTION_NAME, 500, Clients};
+size_0_max_500_clients_50_take_return_all({input, {_Pool, _Size, _Clients}}) ->
+    [];
+size_0_max_500_clients_50_take_return_all({stop, {PoolName, _Size, Clients}}) ->
+    [
+        begin
+            unlink(Pid),
+            exit(Pid, shutdown)
+        end
+     || Pid <- Clients
+    ],
+    stop(PoolName).
+
+bench_size_0_max_500_clients_50_take_return_all(_Input, {PoolName, _Size, Clients}) ->
+    Ref = erlang:make_ref(),
+    Self = self(),
+    lists:foreach(fun(C) -> C ! {do, Self, Ref} end, Clients),
+    lists:foreach(
+        fun(_C) ->
+            receive
+                {done, RecRef} ->
+                    RecRef = Ref
+            after 5000 ->
+                error(timeout)
+            end
+        end,
+        Clients
+    ),
     whereis(PoolName) ! cull_pool,
     Utilization = pooler:pool_utilization(PoolName),
     0 = proplists:get_value(free_count, Utilization),
@@ -188,11 +252,11 @@ take_n(PoolName, Timeout, N) ->
     true = is_pid(Member),
     [Member | take_n(PoolName, Timeout, N - 1)].
 
-client(Pool, N) ->
+client(Pool, Timeout, N) ->
     receive
         {do, From, Ref} ->
-            Taken = take_n(Pool, N),
+            Taken = take_n(Pool, Timeout, N),
             [pooler:return_member(Pool, Member) || Member <- Taken],
             From ! {done, Ref}
     end,
-    client(Pool, N).
+    client(Pool, Timeout, N).
