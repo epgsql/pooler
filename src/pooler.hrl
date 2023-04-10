@@ -60,7 +60,7 @@
     %% new member start requests that are in-flight. The
     %% timestamp records when the start request was initiated
     %% and is used to implement start timeout.
-    starting_members = [] :: [{reference(), erlang:timestamp()}],
+    starting_members = [] :: [{pid(), erlang:timestamp()}],
 
     %% The maximum amount of time to allow for member start.
     member_start_timeout = ?DEFAULT_MEMBER_START_TIMEOUT :: pooler:time_spec(),
