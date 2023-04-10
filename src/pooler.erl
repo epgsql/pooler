@@ -514,7 +514,7 @@ do_accept_member(
     Pool1 =
         #pool{starting_members = StartingMembers} =
         remove_stale_starting_members(Pool, StartingMembers0, StartTimeout),
-    case lists:keymember(StarterPid, 1, StartingMembers) of
+    case lists:keytake(StarterPid, 1, StartingMembers) of
         false ->
             %% A starter completed even though we invalidated the pid
             %% Ask the starter to kill the child and stop. In most cases, the
@@ -524,8 +524,7 @@ do_accept_member(
             %% In this case, we should cleanup.
             pooler_starter:stop_member_async(StarterPid),
             Pool1;
-        true ->
-            StartingMembers1 = lists:keydelete(StarterPid, 1, StartingMembers),
+        {value, _, StartingMembers1} ->
             MRef = erlang:monitor(process, Pid),
             Entry = {MRef, free, os:timestamp()},
             AllMembers1 = store_all_members(Pid, Entry, AllMembers),
