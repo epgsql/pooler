@@ -238,9 +238,9 @@ pool_child_spec(PoolConfig) ->
     pooler_sup:pool_child_spec(PoolConfig).
 
 %% @doc For INTERNAL use. Adds `MemberPid' to the pool.
--spec accept_member(atom() | pid(), pid() | {noproc, _}) -> ok.
-accept_member(PoolName, MemberPid) ->
-    gen_server:call(PoolName, {accept_member, MemberPid}).
+-spec accept_member(pool_name(), pooler_starter:start_result()) -> ok.
+accept_member(PoolName, StartResult) ->
+    gen_server:call(PoolName, {accept_member, StartResult}).
 
 %% @doc Obtain exclusive access to a member from `PoolName'.
 %%
@@ -430,8 +430,8 @@ handle_call({take_member, Timeout}, From = {APid, _}, #pool{} = Pool) when is_pi
     maybe_reply(take_member_from_pool_queued(Pool, From, Timeout));
 handle_call({return_member, Pid, Status}, {_CPid, _Tag}, Pool) ->
     {reply, ok, do_return_member(Pid, Status, Pool)};
-handle_call({accept_member, Pid}, _From, Pool) ->
-    {reply, ok, do_accept_member(Pid, Pool)};
+handle_call({accept_member, StartResult}, _From, Pool) ->
+    {reply, ok, do_accept_member(StartResult, Pool)};
 handle_call(stop, _From, Pool) ->
     {stop, normal, stop_ok, Pool};
 handle_call(pool_stats, _From, Pool) ->
@@ -514,7 +514,7 @@ do_accept_member(
     Pool1 =
         #pool{starting_members = StartingMembers} =
         remove_stale_starting_members(Pool, StartingMembers0, StartTimeout),
-    case lists:keymember(StarterPid, 1, StartingMembers) of
+    case lists:keytake(StarterPid, 1, StartingMembers) of
         false ->
             %% A starter completed even though we invalidated the pid
             %% Ask the starter to kill the child and stop. In most cases, the
@@ -524,8 +524,7 @@ do_accept_member(
             %% In this case, we should cleanup.
             pooler_starter:stop_member_async(StarterPid),
             Pool1;
-        true ->
-            StartingMembers1 = lists:keydelete(StarterPid, 1, StartingMembers),
+        {value, _, StartingMembers1} ->
             MRef = erlang:monitor(process, Pid),
             Entry = {MRef, free, os:timestamp()},
             AllMembers1 = store_all_members(Pid, Entry, AllMembers),
@@ -628,7 +627,7 @@ take_member_bookkeeping(
 
 -spec remove_stale_starting_members(
     #pool{},
-    [{reference(), erlang:timestamp()}],
+    [{pid(), erlang:timestamp()}],
     time_spec()
 ) -> #pool{}.
 remove_stale_starting_members(Pool, StartingMembers, MaxAge) ->
@@ -660,11 +659,11 @@ accumulate_starting_member_not_stale(Pool, Now, SM = {Pid, StartTime}, MaxAgeSec
             AccIn
     end.
 
-init_members_sync(N, #pool{name = PoolName} = Pool) ->
+init_members_sync(N, #pool{name = PoolName, member_sup = MemberSup} = Pool) ->
     Self = self(),
     StartTime = os:timestamp(),
     StartRefs = [
-        {pooler_starter:start_member(Pool, Self), StartTime}
+        {pooler_starter:start_member(PoolName, MemberSup, Self), StartTime}
      || _I <- lists:seq(1, N)
     ],
     Pool1 = Pool#pool{starting_members = StartRefs},
@@ -690,8 +689,8 @@ collect_init_members(#pool{starting_members = Empty} = Pool) when
 collect_init_members(#pool{member_start_timeout = StartTimeout} = Pool) ->
     Timeout = time_as_millis(StartTimeout),
     receive
-        {accept_member, {Ref, Member}} ->
-            collect_init_members(do_accept_member({Ref, Member}, Pool))
+        {accept_member, {_, _} = StartResult} ->
+            collect_init_members(do_accept_member(StartResult, Pool))
     after Timeout ->
         timeout
     end.
@@ -783,10 +782,10 @@ take_member_from_pool_queued(
 %% @doc Add `Count' members to `Pool' asynchronously. Returns updated
 %% `Pool' record with starting member refs added to field
 %% `starting_members'.
-add_members_async(Count, #pool{starting_members = StartingMembers} = Pool) ->
+add_members_async(Count, #pool{name = PoolName, member_sup = MemberSup, starting_members = StartingMembers} = Pool) ->
     StartTime = os:timestamp(),
     StartRefs = [
-        {pooler_starter:start_member(Pool), StartTime}
+        {pooler_starter:start_member(PoolName, MemberSup), StartTime}
      || _I <- lists:seq(1, Count)
     ],
     Pool#pool{starting_members = StartRefs ++ StartingMembers}.

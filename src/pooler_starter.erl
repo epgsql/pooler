@@ -13,9 +13,9 @@
 %% ------------------------------------------------------------------
 
 -export([
-    start_link/2,
-    start_member/1,
+    start_link/1,
     start_member/2,
+    start_member/3,
     stop_member_async/1,
     stop/1
 ]).
@@ -26,6 +26,7 @@
 
 -export([
     init/1,
+    handle_continue/2,
     handle_call/3,
     handle_cast/2,
     handle_info/2,
@@ -33,12 +34,20 @@
     code_change/3
 ]).
 
+-export_type([start_spec/0, start_result/0]).
+
+-type pool_member_sup() :: pid() | atom().
+-type parent() :: pid() | pool.
+-type start_result() :: {StarterPid :: pid(), Result :: pid() | {error, _}}.
+-opaque start_spec() :: {pooler:pool_name(), pool_member_sup(), parent()}.
+
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
 
-start_link(Pool, Parent) ->
-    gen_server:start_link(?MODULE, {Pool, Parent}, []).
+-spec start_link(start_spec()) -> {ok, pid()}.
+start_link({_, _, _} = Spec) ->
+    gen_server:start_link(?MODULE, Spec, []).
 
 stop(Starter) ->
     gen_server:cast(Starter, stop).
@@ -53,9 +62,9 @@ stop(Starter) ->
 %% Each call starts a single use `pooler_starter' instance via
 %% `pooler_starter_sup'. The instance terminates normally after
 %% creating a single member.
--spec start_member(#pool{}) -> pid().
-start_member(Pool) ->
-    {ok, Pid} = pooler_starter_sup:new_starter(Pool, pool),
+-spec start_member(pooler:pool_name(), pool_member_sup()) -> pid().
+start_member(PoolName, PoolMemberSup) ->
+    {ok, Pid} = pooler_starter_sup:new_starter({PoolName, PoolMemberSup, pool}),
     Pid.
 
 %% @doc Same as {@link start_member/1} except that instead of calling
@@ -66,8 +75,9 @@ start_member(Pool) ->
 %%
 %% This is used by the init function in the `pooler' to start the
 %% initial set of pool members in parallel.
-start_member(Pool, Parent) ->
-    {ok, Pid} = pooler_starter_sup:new_starter(Pool, Parent),
+-spec start_member(pooler:pool_name(), pool_member_sup(), pid()) -> pid().
+start_member(PoolName, PoolMemberSup, Parent) ->
+    {ok, Pid} = pooler_starter_sup:new_starter({PoolName, PoolMemberSup, Parent}),
     Pid.
 
 %% @doc Stop a member in the pool
@@ -84,26 +94,34 @@ stop_member_async(Pid) ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 -record(starter, {
-    pool :: #pool{},
-    parent :: pid() | atom(),
-    msg :: term()
+    parent :: parent(),
+    pool_name :: pooler:pool_name(),
+    pool_member_sup :: pool_member_sup(),
+    msg :: start_result() | undefined
 }).
 
--spec init({#pool{}, pid() | atom()}) -> {'ok', #starter{}, 0}.
-init({Pool, Parent}) ->
-    %% trigger immediate timeout message, which we'll use to trigger
-    %% the member start.
-    {ok, #starter{pool = Pool, parent = Parent}, 0}.
+-spec init(start_spec()) -> {ok, #starter{}, {continue, start}}.
+init({PoolName, PoolMemberSup, Parent}) ->
+    {ok, #starter{pool_name = PoolName, pool_member_sup = PoolMemberSup, parent = Parent}, {continue, start}}.
+
+handle_continue(
+    start,
+    #starter{pool_member_sup = PoolSup, pool_name = PoolName} = State
+) ->
+    Msg = do_start_member(PoolSup, PoolName),
+    % asynchronously in order to receive potential `stop*'
+    accept_member_async(self()),
+    {noreply, State#starter{msg = Msg}}.
 
 handle_call(_Request, _From, State) ->
     {noreply, State}.
 
-handle_cast(stop_member, #starter{msg = {_Me, Pid}, pool = #pool{member_sup = MemberSup}} = State) ->
+handle_cast(stop_member, #starter{msg = {_Me, Pid}, pool_member_sup = MemberSup} = State) ->
     %% The process we were starting is no longer valid for the pool.
     %% Cleanup the process and stop normally.
     supervisor:terminate_child(MemberSup, Pid),
     {stop, normal, State};
-handle_cast(accept_member, #starter{msg = Msg, parent = Parent, pool = #pool{name = PoolName}} = State) ->
+handle_cast(accept_member, #starter{msg = Msg, parent = Parent, pool_name = PoolName} = State) ->
     %% Process creation has succeeded. Send the member to the pooler
     %% gen_server to be accepted. Pooler gen_server will notify
     %% us if the member was accepted or needs to cleaned up.
@@ -114,14 +132,6 @@ handle_cast(stop, State) ->
 handle_cast(_Request, State) ->
     {noreply, State}.
 
--spec handle_info(_, _) -> {'noreply', _}.
-handle_info(
-    timeout,
-    #starter{pool = Pool} = State
-) ->
-    Msg = do_start_member(Pool),
-    accept_member_async(self()),
-    {noreply, State#starter{msg = Msg}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -133,7 +143,7 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-do_start_member(#pool{member_sup = PoolSup, name = PoolName}) ->
+do_start_member(PoolSup, PoolName) ->
     case supervisor:start_child(PoolSup, []) of
         {ok, Pid} ->
             {self(), Pid};
@@ -149,9 +159,12 @@ do_start_member(#pool{member_sup = PoolSup, name = PoolName}) ->
             {self(), Error}
     end.
 
+-spec send_accept_member(parent(), pooler:pool_name(), start_result()) -> ok.
 send_accept_member(pool, PoolName, Msg) ->
+    %% used to grow pool
     pooler:accept_member(PoolName, Msg);
 send_accept_member(Pid, _PoolName, Msg) ->
+    %% used during pool initialization
     Pid ! {accept_member, Msg},
     ok.
 
