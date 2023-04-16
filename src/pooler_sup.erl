@@ -10,8 +10,6 @@
     start_link/0
 ]).
 
--include("pooler.hrl").
-
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
@@ -31,7 +29,7 @@ init([]) ->
     ],
     Pools = [pooler_config:list_to_pool(MetricsConfig ++ L) || L <- Config],
     PoolSupSpecs = [pool_sup_spec(Pool) || Pool <- Pools],
-    ets:new(?POOLER_GROUP_TABLE, [set, public, named_table, {write_concurrency, true}]),
+    ets:new(pooler_config:group_table(), [set, public, named_table, {write_concurrency, true}]),
     {ok, {{one_for_one, 5, 60}, [starter_sup_spec() | PoolSupSpecs]}}.
 
 %% @doc Create a new pool from proplist pool config `PoolConfig'. The
@@ -67,8 +65,8 @@ rm_pool(Name) ->
 starter_sup_spec() ->
     {pooler_starter_sup, {pooler_starter_sup, start_link, []}, transient, 5000, supervisor, [pooler_starter_sup]}.
 
-pool_sup_spec(#pool{name = Name} = Pool) ->
-    SupName = pool_sup_name(Name),
+pool_sup_spec(Pool) ->
+    SupName = pool_sup_name(pooler_config:get_name(Pool)),
     {SupName, {pooler_pool_sup, start_link, [Pool]}, transient, 5000, supervisor, [pooler_pool_sup]}.
 
 pool_sup_name(Name) ->

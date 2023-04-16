@@ -4,7 +4,7 @@
 
 -module(pooler_config).
 
--export([list_to_pool/1]).
+-export([list_to_pool/1, get_name/1, get_start_mfa/1, group_table/0]).
 
 -include("pooler.hrl").
 
@@ -26,6 +26,18 @@ list_to_pool(P) ->
         metrics_api = ?gv(metrics_api, P, folsom),
         queue_max = ?gv(queue_max, P, ?DEFAULT_POOLER_QUEUE_MAX)
     }.
+
+-spec get_name(#pool{}) -> pooler:pool_name().
+get_name(#pool{name = Name}) ->
+    Name.
+
+-spec get_start_mfa(pooler:pool_state()) -> {module(), atom(), [any()]}.
+get_start_mfa(#pool{start_mfa = MFA}) ->
+    MFA.
+
+-spec group_table() -> atom().
+group_table() ->
+    ?POOLER_GROUP_TABLE.
 
 %% Return `Value' for `Key' in proplist `P' or crashes with an
 %% informative message if no value is found.
