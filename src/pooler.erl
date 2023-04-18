@@ -65,7 +65,7 @@
 -export_type([pool_config/0, pool_name/0, group_name/0, member_info/0, time_unit/0, time_spec/0]).
 
 % Internal
--export_type([members_map/0, consumers_map/0, requestor_queue/0]).
+-export_type([members_map/0, consumers_map/0, requestor_queue/0, pool_state/0]).
 
 -type pool_name() :: atom().
 %% The name of the pool
@@ -98,6 +98,8 @@
 -type members_map() :: #{pid() => member_info()}.
 %% Internal
 -type consumers_map() :: #{pid() => {reference(), [pid()]}}.
+%% Internal
+-type pool_state() :: #pool{}.
 %% Internal
 
 -if(?OTP_RELEASE >= 25).
@@ -219,8 +221,7 @@ rm_group(GroupName) ->
 rm_group_members(MemberPids) ->
     lists:foldl(
         fun(MemberPid, Acc) ->
-            Pool = gen_server:call(MemberPid, dump_pool),
-            PoolName = Pool#pool.name,
+            #{name := PoolName} = gen_server:call(MemberPid, dump_pool),
             case pooler_sup:rm_pool(PoolName) of
                 ok -> Acc;
                 _ -> [PoolName | Acc]
@@ -439,7 +440,7 @@ handle_call(pool_stats, _From, Pool) ->
 handle_call(pool_utilization, _From, Pool) ->
     {reply, compute_utilization(Pool), Pool};
 handle_call(dump_pool, _From, Pool) ->
-    {reply, Pool, Pool};
+    {reply, to_map(Pool), Pool};
 handle_call({call_free_members, Fun}, _From, #pool{free_pids = Pids} = Pool) ->
     {reply, do_call_free_members(Fun, Pids), Pool};
 handle_call(_Request, _From, Pool) ->
@@ -1199,6 +1200,12 @@ do_call_free_member(Fun, Pid) ->
         _Class:Reason ->
             {error, Reason}
     end.
+
+to_map(#pool{} = Pool) ->
+    [Name | Values] = tuple_to_list(Pool),
+    maps:from_list(
+        [{'$record_name', Name} | lists:zip(record_info(fields, pool), Values)]
+    ).
 
 % >= OTP-21
 -ifdef(OTP_RELEASE).

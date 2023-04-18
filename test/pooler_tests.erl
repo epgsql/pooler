@@ -1,7 +1,6 @@
 -module(pooler_tests).
 
 -include_lib("eunit/include/eunit.hrl").
--include("../src/pooler.hrl").
 
 -export([sleep_for_configured_timeout/0]).
 
@@ -329,13 +328,13 @@ basic_tests() ->
             M2 = pooler:take_member(test_pool_1),
             ?assert(M1 =/= M2),
             Pool1 = gen_server:call(test_pool_1, dump_pool),
-            ?assertEqual(2, Pool1#pool.in_use_count),
-            ?assertEqual(0, Pool1#pool.free_count),
+            ?assertEqual(2, maps:get(in_use_count, Pool1)),
+            ?assertEqual(0, maps:get(free_count, Pool1)),
             pooler:return_member(test_pool_1, M1),
             pooler:return_member(test_pool_1, M2),
             Pool2 = gen_server:call(test_pool_1, dump_pool),
-            ?assertEqual(0, Pool2#pool.in_use_count),
-            ?assertEqual(2, Pool2#pool.free_count),
+            ?assertEqual(0, maps:get(in_use_count, Pool2)),
+            ?assertEqual(2, maps:get(free_count, Pool2)),
             ok
         end},
 
@@ -435,13 +434,13 @@ basic_tests() ->
         end},
 
         {"utilization returns sane results", fun() ->
-            #pool{max_count = MaxCount, queue_max = QueueMax} = sys:get_state(test_pool_1),
+            #{max_count := MaxCount, queue_max := QueueMax} = dump_pool(test_pool_1),
 
-            ?assertEqual(MaxCount, ?gv(max_count, pooler:pool_utilization(test_pool_1))),
-            ?assertEqual(0, ?gv(in_use_count, pooler:pool_utilization(test_pool_1))),
-            ?assertEqual(2, ?gv(free_count, pooler:pool_utilization(test_pool_1))),
-            ?assertEqual(0, ?gv(queued_count, pooler:pool_utilization(test_pool_1))),
-            ?assertEqual(QueueMax, ?gv(queue_max, pooler:pool_utilization(test_pool_1)))
+            ?assertEqual(MaxCount, proplists:get_value(max_count, pooler:pool_utilization(test_pool_1))),
+            ?assertEqual(0, proplists:get_value(in_use_count, pooler:pool_utilization(test_pool_1))),
+            ?assertEqual(2, proplists:get_value(free_count, pooler:pool_utilization(test_pool_1))),
+            ?assertEqual(0, proplists:get_value(queued_count, pooler:pool_utilization(test_pool_1))),
+            ?assertEqual(QueueMax, proplists:get_value(queue_max, pooler:pool_utilization(test_pool_1)))
         end}
     ].
 
@@ -680,7 +679,7 @@ pooler_scheduled_cull_test_() ->
                             %% wait for longer than cull delay
                             timer:sleep(250),
                             ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
-                            ?assertEqual(2, ?gv(free_count, pooler:pool_utilization(test_pool_1)))
+                            ?assertEqual(2, proplists:get_value(free_count, pooler:pool_utilization(test_pool_1)))
                         end}
                     end,
 
@@ -690,7 +689,7 @@ pooler_scheduled_cull_test_() ->
                             %% wait for longer than cull delay
                             timer:sleep(250),
                             ?assertEqual(2, length(pooler:pool_stats(test_pool_1))),
-                            ?assertEqual(2, ?gv(free_count, pooler:pool_utilization(test_pool_1)))
+                            ?assertEqual(2, proplists:get_value(free_count, pooler:pool_utilization(test_pool_1)))
                         end}
                     end,
 
@@ -731,8 +730,8 @@ in_use_members_not_culled(Pids, N) ->
             PidCount,
             length(pooler:pool_stats(test_pool_1))
         ),
-        ?assertEqual(0, ?gv(free_count, pooler:pool_utilization(test_pool_1))),
-        ?assertEqual(PidCount, ?gv(in_use_count, pooler:pool_utilization(test_pool_1))),
+        ?assertEqual(0, proplists:get_value(free_count, pooler:pool_utilization(test_pool_1))),
+        ?assertEqual(PidCount, proplists:get_value(in_use_count, pooler:pool_utilization(test_pool_1))),
         Returns = lists:sublist(Pids, N),
         [
             pooler:return_member(test_pool_1, P)
@@ -785,7 +784,7 @@ random_message_test_() ->
 
             fun() ->
                 RawPool = gen_server:call(test_pool_1, dump_pool),
-                ?assertEqual(pool, element(1, RawPool))
+                ?assertEqual(pool, maps:get('$record_name', RawPool))
             end
         ]}.
 
@@ -901,7 +900,7 @@ pooler_integration_queueing_test_() ->
         [
             fun(_) ->
                 fun() ->
-                    ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
+                    ?assertEqual(0, maps:get(free_count, dump_pool(test_pool_1))),
                     Val = pooler:take_member(test_pool_1, 10),
                     ?assert(is_pid(Val)),
                     pooler:return_member(test_pool_1, Val)
@@ -910,10 +909,10 @@ pooler_integration_queueing_test_() ->
             fun(_) ->
                 fun() ->
                     application:set_env(pooler, sleep_time, 1),
-                    ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
+                    ?assertEqual(0, maps:get(free_count, dump_pool(test_pool_1))),
                     Val = pooler:take_member(test_pool_1, 0),
                     ?assertEqual(error_no_members, Val),
-                    ?assertEqual(0, ?gv(free_count, pooler:pool_utilization(test_pool_1))),
+                    ?assertEqual(0, proplists:get_value(free_count, pooler:pool_utilization(test_pool_1))),
                     timer:sleep(50),
                     %Next request should be available
                     Pid = pooler:take_member(test_pool_1, 0),
@@ -924,10 +923,10 @@ pooler_integration_queueing_test_() ->
             fun(_) ->
                 fun() ->
                     application:set_env(pooler, sleep_time, 10),
-                    ?assertEqual(0, (dump_pool(test_pool_1))#pool.free_count),
+                    ?assertEqual(0, maps:get(free_count, dump_pool(test_pool_1))),
                     [
                         ?assertEqual(pooler:take_member(test_pool_1, 0), error_no_members)
-                     || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
+                     || _ <- lists:seq(1, maps:get(max_count, dump_pool(test_pool_1)))
                     ],
                     timer:sleep(50),
                     %Next request should be available
@@ -947,15 +946,15 @@ pooler_integration_queueing_test_() ->
                             ?assert(is_pid(Val)),
                             pooler:return_member(Val)
                         end)
-                     || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
+                     || _ <- lists:seq(1, maps:get(max_count, dump_pool(test_pool_1)))
                     ],
-                    ?assertEqual(0, ?gv(free_count, pooler:pool_utilization(test_pool_1))),
-                    ?assert(?gv(queued_count, pooler:pool_utilization(test_pool_1)) >= 1),
-                    ?assertEqual(10, ?gv(queue_max, pooler:pool_utilization(test_pool_1))),
+                    ?assertEqual(0, proplists:get_value(free_count, pooler:pool_utilization(test_pool_1))),
+                    ?assert(proplists:get_value(queued_count, pooler:pool_utilization(test_pool_1)) >= 1),
+                    ?assertEqual(10, proplists:get_value(queue_max, pooler:pool_utilization(test_pool_1))),
 
                     timer:sleep(50),
-                    ?assertEqual(10, queue:len((dump_pool(test_pool_1))#pool.queued_requestors)),
-                    ?assertEqual(10, ?gv(queue_max, pooler:pool_utilization(test_pool_1))),
+                    ?assertEqual(10, queue:len(maps:get(queued_requestors, dump_pool(test_pool_1)))),
+                    ?assertEqual(10, proplists:get_value(queue_max, pooler:pool_utilization(test_pool_1))),
 
                     ?assertEqual(pooler:take_member(test_pool_1, 500), error_no_members),
                     ExpectKeys = lists:sort([
@@ -1021,7 +1020,7 @@ pooler_integration_queueing_return_member_test_() ->
                             end,
                             Parent ! {returned, self()}
                         end)
-                     || _ <- lists:seq(1, (dump_pool(test_pool_1))#pool.max_count)
+                     || _ <- lists:seq(1, maps:get(max_count, dump_pool(test_pool_1)))
                     ],
                     [
                         receive
@@ -1047,9 +1046,13 @@ pooler_integration_queueing_return_member_test_() ->
                             pooler:return_member(test_pool_1, Result)
                     end,
                     ?assertEqual(
-                        (dump_pool(test_pool_1))#pool.max_count, length((dump_pool(test_pool_1))#pool.free_pids)
+                        maps:get(max_count, dump_pool(test_pool_1)),
+                        length(maps:get(free_pids, dump_pool(test_pool_1)))
                     ),
-                    ?assertEqual((dump_pool(test_pool_1))#pool.max_count, (dump_pool(test_pool_1))#pool.free_count)
+                    ?assertEqual(
+                        maps:get(max_count, dump_pool(test_pool_1)),
+                        maps:get(free_count, dump_pool(test_pool_1))
+                    )
                 end
             end
         ]}.
@@ -1144,11 +1147,11 @@ pooler_auto_grow_disabled_by_default_test_() ->
             end,
             [
                 {"take one, and it should not auto-grow", fun() ->
-                    ?assertEqual(2, (dump_pool(test_pool_1))#pool.free_count),
+                    ?assertEqual(2, maps:get(free_count, dump_pool(test_pool_1))),
                     P = pooler:take_member(test_pool_1),
                     ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
                     timer:sleep(100),
-                    ?assertEqual(1, (dump_pool(test_pool_1))#pool.free_count),
+                    ?assertEqual(1, maps:get(free_count, dump_pool(test_pool_1))),
                     ok,
                     pooler:return_member(test_pool_1, P)
                 end}
@@ -1183,11 +1186,11 @@ pooler_auto_grow_enabled_test_() ->
             end,
             [
                 {"take one, and it should grow by 2", fun() ->
-                    ?assertEqual(2, (dump_pool(test_pool_1))#pool.free_count),
+                    ?assertEqual(2, maps:get(free_count, dump_pool(test_pool_1))),
                     P = pooler:take_member(test_pool_1),
                     ?assertMatch({"type-0", _Id}, pooled_gs:get_id(P)),
                     timer:sleep(100),
-                    ?assertEqual(3, (dump_pool(test_pool_1))#pool.free_count),
+                    ?assertEqual(3, maps:get(free_count, dump_pool(test_pool_1))),
                     ok,
                     pooler:return_member(test_pool_1, P)
                 end}
@@ -1346,13 +1349,13 @@ call_free_members_test_() ->
             end,
             [
                 {"perform a ping across the pool when all workers are free", fun() ->
-                    ?assertEqual(NumWorkers, (dump_pool(PoolName))#pool.free_count),
+                    ?assertEqual(NumWorkers, maps:get(free_count, dump_pool(PoolName))),
                     Res = pooler:call_free_members(PoolName, fun pooled_gs:ping/1),
 
                     ?assertEqual(NumWorkers, count_pongs(Res))
                 end},
                 {"perform a ping across the pool when two workers are taken", fun() ->
-                    ?assertEqual(NumWorkers, (dump_pool(PoolName))#pool.free_count),
+                    ?assertEqual(NumWorkers, maps:get(free_count, dump_pool(PoolName))),
                     Pids = [pooler:take_member(PoolName) || _X <- lists:seq(0, 1)],
                     Res = pooler:call_free_members(PoolName, fun pooled_gs:ping/1),
 
@@ -1361,7 +1364,7 @@ call_free_members_test_() ->
                     [pooler:return_member(PoolName, P) || P <- Pids]
                 end},
                 {"perform an op where the op crashes all free members", fun() ->
-                    ?assertEqual(NumWorkers, (dump_pool(PoolName))#pool.free_count),
+                    ?assertEqual(NumWorkers, maps:get(free_count, dump_pool(PoolName))),
                     Res = pooler:call_free_members(
                         PoolName,
                         fun pooled_gs:error_on_call/1
@@ -1421,7 +1424,7 @@ children_count(SupId) ->
     length(supervisor:which_children(SupId)).
 
 starting_members(PoolName) ->
-    length((dump_pool(PoolName))#pool.starting_members).
+    length(maps:get(starting_members, dump_pool(PoolName))).
 
 dump_pool(PoolName) ->
     gen_server:call(PoolName, dump_pool).

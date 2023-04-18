@@ -4,9 +4,8 @@
 
 -export([start_link/1, init/1]).
 
--include("pooler.hrl").
-
-start_link(#pool{start_mfa = {_, _, _} = MFA} = Pool) ->
+start_link(Pool) ->
+    MFA = pooler_config:get_start_mfa(Pool),
     SupName = pooler_pool_sup:member_sup_name(Pool),
     supervisor:start_link({local, SupName}, ?MODULE, MFA).
 

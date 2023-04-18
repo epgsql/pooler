@@ -5,7 +5,6 @@
 -module(pooler_starter).
 -behaviour(gen_server).
 
--include("pooler.hrl").
 -include_lib("kernel/include/logger.hrl").
 
 %% ------------------------------------------------------------------

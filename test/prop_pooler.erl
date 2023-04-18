@@ -12,7 +12,6 @@
 
 -include_lib("proper/include/proper.hrl").
 -include_lib("stdlib/include/assert.hrl").
--include("pooler.hrl").
 
 prop_fixed_start(doc) ->
     "Check that the pool of any fixed size can be started, internal statistics is correct".
