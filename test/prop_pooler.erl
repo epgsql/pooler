@@ -17,19 +17,19 @@ prop_fixed_start(doc) ->
     "Check that the pool of any fixed size can be started, internal statistics is correct".
 
 prop_fixed_start() ->
-    Conf0 = [
-        {name, ?FUNCTION_NAME},
-        {start_mfa, {pooled_gs, start_link, [{?FUNCTION_NAME}]}}
-    ],
+    Conf0 =
+        #{
+            name => ?FUNCTION_NAME,
+            start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
+        },
     ?FORALL(
         Size,
         pos_integer(),
         with_pool(
-            [
-                {init_count, Size},
-                {max_count, Size}
-                | Conf0
-            ],
+            Conf0#{
+                init_count => Size,
+                max_count => Size
+            },
             fun() ->
                 %% Pool is not utilized
                 pool_is_free(?FUNCTION_NAME, Size),
@@ -42,19 +42,18 @@ prop_fixed_checkout_all(doc) ->
     "Can take all members from fixed-size pool. Following attempts will return error. Stats is correct.".
 
 prop_fixed_checkout_all() ->
-    Conf0 = [
-        {name, ?FUNCTION_NAME},
-        {start_mfa, {pooled_gs, start_link, [{?FUNCTION_NAME}]}}
-    ],
+    Conf0 = #{
+        name => ?FUNCTION_NAME,
+        start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
+    },
     ?FORALL(
         Size,
         pos_integer(),
         with_pool(
-            [
-                {init_count, Size},
-                {max_count, Size}
-                | Conf0
-            ],
+            Conf0#{
+                init_count => Size,
+                max_count => Size
+            },
             fun() ->
                 ?assert(
                     lists:all(
@@ -75,20 +74,19 @@ prop_dynamic_checkout(doc) ->
     "It's possible to take all fixed and then all dynamic members, but no more than max_count; stats is correct".
 
 prop_dynamic_checkout() ->
-    Conf0 = [
-        {name, ?FUNCTION_NAME},
-        {max_age, {1, min}},
-        {start_mfa, {pooled_gs, start_link, [{?FUNCTION_NAME}]}}
-    ],
+    Conf0 = #{
+        name => ?FUNCTION_NAME,
+        max_age => {1, min},
+        start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
+    },
     ?FORALL(
         {Size, Extra},
         {pos_integer(), pos_integer()},
         with_pool(
-            [
-                {init_count, Size},
-                {max_count, Size + Extra}
-                | Conf0
-            ],
+            Conf0#{
+                init_count => Size,
+                max_count => Size + Extra
+            },
             fun() ->
                 MaxCount = Size + Extra,
                 ?assert(
@@ -119,10 +117,10 @@ prop_fixed_take_return(doc) ->
     "The state of the pool is same before all members are taken and after they are returned".
 
 prop_fixed_take_return() ->
-    Conf0 = [
-        {name, ?FUNCTION_NAME},
-        {start_mfa, {pooled_gs, start_link, [{?FUNCTION_NAME}]}}
-    ],
+    Conf0 = #{
+        name => ?FUNCTION_NAME,
+        start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
+    },
     Stats = fun() ->
         lists:sort([{Pid, State} || {Pid, {_, State, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
     end,
@@ -130,11 +128,10 @@ prop_fixed_take_return() ->
         Size,
         pos_integer(),
         with_pool(
-            [
-                {init_count, Size},
-                {max_count, Size}
-                | Conf0
-            ],
+            Conf0#{
+                init_count => Size,
+                max_count => Size
+            },
             fun() ->
                 UtilizationBefore = utilization(?FUNCTION_NAME),
                 StatsBefore = Stats(),
@@ -156,10 +153,10 @@ prop_fixed_take_return_broken(doc) ->
     "Pool recovers to initial state when all members are returned with 'fail' flag, but workers are replaced".
 
 prop_fixed_take_return_broken() ->
-    Conf0 = [
-        {name, ?FUNCTION_NAME},
-        {start_mfa, {pooled_gs, start_link, [{?FUNCTION_NAME}]}}
-    ],
+    Conf0 = #{
+        name => ?FUNCTION_NAME,
+        start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
+    },
     Stats = fun() ->
         lists:sort([{Pid, State} || {Pid, {_, State, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
     end,
@@ -167,11 +164,10 @@ prop_fixed_take_return_broken() ->
         Size,
         pos_integer(),
         with_pool(
-            [
-                {init_count, Size},
-                {max_count, Size}
-                | Conf0
-            ],
+            Conf0#{
+                init_count => Size,
+                max_count => Size
+            },
             fun() ->
                 UtilizationBefore = utilization(?FUNCTION_NAME),
                 StatsBefore = Stats(),
@@ -206,10 +202,10 @@ prop_fixed_client_died(doc) ->
     "Pool recovers to initial state when client that have taken processes have died with reason 'normal'".
 
 prop_fixed_client_died() ->
-    Conf0 = [
-        {name, ?FUNCTION_NAME},
-        {start_mfa, {pooled_gs, start_link, [{?FUNCTION_NAME}]}}
-    ],
+    Conf0 = #{
+        name => ?FUNCTION_NAME,
+        start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
+    },
     Stats = fun() ->
         lists:sort([{Pid, State} || {Pid, {_, State, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
     end,
@@ -217,11 +213,10 @@ prop_fixed_client_died() ->
         Size,
         pos_integer(),
         with_pool(
-            [
-                {init_count, Size},
-                {max_count, Size}
-                | Conf0
-            ],
+            Conf0#{
+                init_count => Size,
+                max_count => Size
+            },
             fun() ->
                 Main = self(),
                 UtilizationBefore = utilization(?FUNCTION_NAME),
@@ -277,9 +272,7 @@ prop_group_take_return(doc) ->
     "Take all workers from all group members - no more workers can be taken. Return them - pools are free.".
 
 prop_group_take_return() ->
-    Conf0 = [
-        {start_mfa, {pooled_gs, start_link, [{?FUNCTION_NAME}]}}
-    ],
+    Conf0 = #{start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}},
     PoolName = fun(I) -> list_to_atom(atom_to_list(?FUNCTION_NAME) ++ integer_to_list(I)) end,
     ?FORALL(
         {NumWorkers, NumPools},
@@ -287,13 +280,12 @@ prop_group_take_return() ->
         begin
             with_pools(
                 [
-                    [
-                        {name, PoolName(I)},
-                        {init_count, NumWorkers},
-                        {max_count, NumWorkers},
-                        {group, ?FUNCTION_NAME}
-                        | Conf0
-                    ]
+                    Conf0#{
+                        name => PoolName(I),
+                        init_count => NumWorkers,
+                        max_count => NumWorkers,
+                        group => ?FUNCTION_NAME
+                    }
                  || I <- lists:seq(1, NumPools)
                 ],
                 fun() ->
@@ -348,7 +340,7 @@ with_pools(Confs, Fun) ->
         {ok, _} = application:ensure_all_started(pooler),
         [{ok, _} = pooler:new_pool(Conf) || Conf <- Confs],
         Res = Fun(),
-        [ok = pooler:rm_pool(proplists:get_value(name, Conf)) || Conf <- Confs],
+        [ok = pooler:rm_pool(maps:get(name, Conf)) || Conf <- Confs],
         Res
     after
         application:stop(pooler)

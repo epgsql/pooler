@@ -4,9 +4,9 @@
 
 -export([start_link/1, init/1]).
 
-start_link(Pool) ->
-    MFA = pooler_config:get_start_mfa(Pool),
-    SupName = pooler_pool_sup:member_sup_name(Pool),
+-spec start_link(pooler:pool_config()) -> {ok, pid()} | {error, any()}.
+start_link(#{start_mfa := MFA} = PoolConf) ->
+    SupName = pooler_pool_sup:member_sup_name(PoolConf),
     supervisor:start_link({local, SupName}, ?MODULE, MFA).
 
 init({Mod, Fun, Args}) ->

@@ -10,16 +10,16 @@
     build_member_sup_name/1
 ]).
 
--spec start_link(pooler:pool_state()) -> {ok, pid()}.
-start_link(Pool) ->
-    SupName = pool_sup_name(Pool),
-    supervisor:start_link({local, SupName}, ?MODULE, Pool).
+-spec start_link(pooler:pool_config()) -> {ok, pid()}.
+start_link(PoolConf) ->
+    SupName = pool_sup_name(PoolConf),
+    supervisor:start_link({local, SupName}, ?MODULE, PoolConf).
 
-init(Pool) ->
-    PoolerSpec = {pooler, {pooler, start_link, [Pool]}, transient, 5000, worker, [pooler]},
-    MemberSupName = member_sup_name(Pool),
+init(PoolConf) ->
+    PoolerSpec = {pooler, {pooler, start_link, [PoolConf]}, transient, 5000, worker, [pooler]},
+    MemberSupName = member_sup_name(PoolConf),
     MemberSupSpec =
-        {MemberSupName, {pooler_pooled_worker_sup, start_link, [Pool]}, transient, 5000, supervisor, [
+        {MemberSupName, {pooler_pooled_worker_sup, start_link, [PoolConf]}, transient, 5000, supervisor, [
             pooler_pooled_worker_sup
         ]},
 
@@ -27,11 +27,13 @@ init(Pool) ->
     Restart = {one_for_all, 5, 60},
     {ok, {Restart, [MemberSupSpec, PoolerSpec]}}.
 
-member_sup_name(Pool) ->
-    build_member_sup_name(pooler_config:get_name(Pool)).
+-spec member_sup_name(pooler:pool_config()) -> atom().
+member_sup_name(#{name := Name}) ->
+    build_member_sup_name(Name).
 
+-spec build_member_sup_name(pooler:pool_name()) -> atom().
 build_member_sup_name(PoolName) ->
     list_to_atom("pooler_" ++ atom_to_list(PoolName) ++ "_member_sup").
 
-pool_sup_name(Pool) ->
-    list_to_atom("pooler_" ++ atom_to_list(pooler_config:get_name(Pool)) ++ "_pool_sup").
+pool_sup_name(#{name := Name}) ->
+    list_to_atom("pooler_" ++ atom_to_list(Name) ++ "_pool_sup").

@@ -15,7 +15,7 @@ start_link() ->
 
 init([]) ->
     %% a list of pool configs
-    Config =
+    Configs =
         case application:get_env(pooler, pools) of
             {ok, C} ->
                 C;
@@ -23,13 +23,14 @@ init([]) ->
                 []
         end,
     {MetricsApi, MetricsMod} = metrics_module(),
-    MetricsConfig = [
-        {metrics_mod, MetricsMod},
-        {metrics_api, MetricsApi}
+    PoolSupSpecs = [
+        pool_sup_spec((pooler:config_as_map(Config))#{
+            metrics_mod => MetricsMod,
+            metrics_api => MetricsApi
+        })
+     || Config <- Configs
     ],
-    Pools = [pooler_config:list_to_pool(MetricsConfig ++ L) || L <- Config],
-    PoolSupSpecs = [pool_sup_spec(Pool) || Pool <- Pools],
-    ets:new(pooler_config:group_table(), [set, public, named_table, {write_concurrency, true}]),
+    pooler:create_group_table(),
     {ok, {{one_for_one, 5, 60}, [starter_sup_spec() | PoolSupSpecs]}}.
 
 %% @doc Create a new pool from proplist pool config `PoolConfig'. The
@@ -42,13 +43,10 @@ new_pool(PoolConfig) ->
 %% public API for this functionality is {@link pooler:pool_child_spec/1}.
 pool_child_spec(PoolConfig) ->
     {MetricsApi, MetricsMod} = metrics_module(),
-    NewPool = pooler_config:list_to_pool(
-        [
-            {metrics_mod, MetricsMod},
-            {metrics_api, MetricsApi}
-        ] ++ PoolConfig
-    ),
-    pool_sup_spec(NewPool).
+    pool_sup_spec(PoolConfig#{
+        metrics_mod => MetricsMod,
+        metrics_api => MetricsApi
+    }).
 
 %% @doc Shutdown the named pool.
 rm_pool(Name) ->
@@ -65,9 +63,9 @@ rm_pool(Name) ->
 starter_sup_spec() ->
     {pooler_starter_sup, {pooler_starter_sup, start_link, []}, transient, 5000, supervisor, [pooler_starter_sup]}.
 
-pool_sup_spec(Pool) ->
-    SupName = pool_sup_name(pooler_config:get_name(Pool)),
-    {SupName, {pooler_pool_sup, start_link, [Pool]}, transient, 5000, supervisor, [pooler_pool_sup]}.
+pool_sup_spec(#{name := Name} = PoolConfig) ->
+    SupName = pool_sup_name(Name),
+    {SupName, {pooler_pool_sup, start_link, [PoolConfig]}, transient, 5000, supervisor, [pooler_pool_sup]}.
 
 pool_sup_name(Name) ->
     list_to_atom("pooler_" ++ atom_to_list(Name) ++ "_pool_sup").
