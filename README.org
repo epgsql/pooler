@@ -347,6 +347,20 @@ Please attach the output of ~rebar3 bench --baseline master~ after your changes 
 in order to prove that there were no performance regressions. Please attach the OTP version you run the
 benchmarks on.
 
+*** New release
+
+Our goal is to allow the hot code upgrade of ~pooler~, so it is shipped with ~.appup~ file and hot upgrade
+procedure is tested in CI.
+
+To cut a new release, do the following steps:
+
+1. In ~src/pooler.app.src~: update the ~vsn~
+2. In ~src/pooler.appup.src~: replace the contents with upgrade instructions for a new release
+3. In ~test/relx-base.config~: update the ~pooler~'s app version to a previous release (or leave it without version)
+4. In ~test/relx-current.config~: update the ~pooler~'s app version to a new one
+5. In ~.github/workflows/hot_upgrade.yml~: update ~from_version~ to a previous release, maybe bump OTP version as well
+6. Push, wait for the green build, tag
+
 ** License
 Pooler is licensed under the Apache License Version 2.0.  See the
 [[file:LICENSE][LICENSE]] file for details.

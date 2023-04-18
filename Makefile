@@ -42,6 +42,12 @@ clean: $(REBAR)
 dialyzer: $(REBAR)
 	$(REBAR) dialyzer
 
+hotupgrade_setup: $(REBAR)
+	./test/hotupgrade_test.sh setup $(BASE_REV)
+
+hotupgrade_check:
+	./test/hotupgrade_test.sh check
+
 # Get rebar3 if it doesn't exist. If rebar3 was found on PATH, the
 # $(REBAR) dep will be satisfied since the file will exist.
 
