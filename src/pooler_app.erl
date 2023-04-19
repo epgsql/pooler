@@ -10,10 +10,7 @@
 %% ===================================================================
 
 start(_StartType, _StartArgs) ->
-    case pooler_sup:start_link() of
-        {ok, Pid} -> {ok, Pid};
-        Other -> {error, Other}
-    end.
+    pooler_sup:start_link().
 
 stop(_State) ->
     ok.

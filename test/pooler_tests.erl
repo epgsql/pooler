@@ -120,13 +120,13 @@ pooler_basics_via_config_test_() ->
             fun() ->
                 error_logger_mon:reset(),
                 Pools = [
-                    [
-                        {name, test_pool_1},
-                        {max_count, 3},
-                        {init_count, 2},
-                        {cull_interval, {0, min}},
-                        {start_mfa, {pooled_gs, start_link, [{"type-0"}]}}
-                    ]
+                    #{
+                        name => test_pool_1,
+                        max_count => 3,
+                        init_count => 2,
+                        cull_interval => {0, min},
+                        start_mfa => {pooled_gs, start_link, [{"type-0"}]}
+                    }
                 ],
                 application:set_env(pooler, pools, Pools),
                 application:start(pooler)
@@ -154,12 +154,12 @@ pooler_basics_dynamic_test_() ->
             % setup
             fun() ->
                 error_logger_mon:reset(),
-                Pool = [
-                    {name, test_pool_1},
-                    {max_count, 3},
-                    {init_count, 2},
-                    {start_mfa, {pooled_gs, start_link, [{"type-0"}]}}
-                ],
+                Pool = #{
+                    name => test_pool_1,
+                    max_count => 3,
+                    init_count => 2,
+                    start_mfa => {pooled_gs, start_link, [{"type-0"}]}
+                },
                 application:unset_env(pooler, pools),
                 application:start(pooler),
                 pooler:new_pool(Pool)
@@ -187,12 +187,12 @@ pooler_basics_integration_to_other_supervisor_test_() ->
             % setup
             fun() ->
                 error_logger_mon:reset(),
-                Pool = [
-                    {name, test_pool_1},
-                    {max_count, 3},
-                    {init_count, 2},
-                    {start_mfa, {pooled_gs, start_link, [{"type-0"}]}}
-                ],
+                Pool = #{
+                    name => test_pool_1,
+                    max_count => 3,
+                    init_count => 2,
+                    start_mfa => {pooled_gs, start_link, [{"type-0"}]}
+                },
                 application:unset_env(pooler, pools),
                 application:start(pooler),
                 supervisor:start_link(fake_external_supervisor, Pool)

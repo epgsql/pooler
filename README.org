@@ -81,8 +81,8 @@ better support multiple independent pools.
 
 Pool configuration is specified in the pooler application's
 environment.  This can be provided in a config file using =-config= or
-set at startup using =application:set_env(pooler, pools,
-Pools)=. Here's an example config file that creates two pools of
+set at startup using =application:set_env(pooler, pools, Pools)=.
+Here's an example config file that creates two pools of
 Riak pb clients each talking to a different node in a local cluster
 and one pool talking to a Postgresql database:
 
@@ -94,25 +94,25 @@ and one pool talking to a Postgresql database:
   [
    {pooler, [
            {pools, [
-                    [{name, rc8081},
-                     {group, riak},
-                     {max_count, 5},
-                     {init_count, 2},
-                     {start_mfa,
-                      {riakc_pb_socket, start_link, ["localhost", 8081]}}],
+                    #{name => rc8081,
+                      group => riak,
+                      max_count => 5,
+                      init_count => 2,
+                      start_mfa =>
+                       {riakc_pb_socket, start_link, ["localhost", 8081]}},
 
-                    [{name, rc8082},
-                     {group, riak},
-                     {max_count, 5},
-                     {init_count, 2},
-                     {start_mfa,
-                      {riakc_pb_socket, start_link, ["localhost", 8082]}}],
+                    #{name => rc8082,
+                      group => riak,
+                      max_count => 5,
+                      init_count => 2,
+                      start_mfa =>
+                       {riakc_pb_socket, start_link, ["localhost", 8082]}},
 
-                    [{name, pg_db1},
-                     {max_count, 10},
-                     {init_count, 2},
-                     {start_mfa,
-                      {my_pg_sql_driver, start_link, ["db_host"]}}]
+                    #{name => pg_db1,
+                      max_count => 10,
+                      init_count => 2,
+                      start_mfa =>
+                       {my_pg_sql_driver, start_link, ["db_host"]}}
                    ]}
              %% if you want to enable metrics, set this to a module with
              %% an API conformant to the folsom_metrics module.
@@ -159,15 +159,15 @@ defaults to ={30, sec}=.
 
 *** Pool Configuration via =pooler:new_pool=
 You can create pools using =pooler:new_pool/1= when accepts a
-proplist of pool configuration. Here's an example:
+map of pool configuration. Here's an example:
 #+BEGIN_SRC erlang
-PoolConfig = [{name, rc8081},
-              {group, riak},
-              {max_count, 5},
-              {init_count, 2},
-              {start_mfa,
-               {riakc_pb_socket,
-                start_link, ["localhost", 8081]}}],
+PoolConfig = #{
+    name => rc8081,
+    group => riak,
+    max_count => 5,
+    init_count => 2,
+    start_mfa => {riakc_pb_socket, start_link, ["localhost", 8081]}
+},
 pooler:new_pool(PoolConfig).
 #+END_SRC
 *** Using pooler
