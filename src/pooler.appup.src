@@ -1,0 +1,24 @@
+% -*- mode: erlang -*-
+{"1.6.0",
+  [{<<"1\\.5\\.2.*">>,
+    [{update, pooler, {advanced, []}},
+     {load_module, pooler_starter},
+     {load_module, pooler_app},
+     {update, pooler_sup, supervisor},
+     {update, pooler_pool_sup, supervisor},
+     {update, pooler_starter_sup, supervisor},
+     {update, pooler_pooled_worker_sup, supervisor},
+     {delete_module, pooler_config}]
+   },
+   {<<"1\\.5\\.3.*">>,
+    [{update, pooler, {advanced, []}},
+     {load_module, pooler_starter},
+     {load_module, pooler_app},
+     {update, pooler_sup, supervisor},
+     {update, pooler_pool_sup, supervisor},
+     {update, pooler_starter_sup, supervisor},
+     {update, pooler_pooled_worker_sup, supervisor},
+     {delete_module, pooler_config}]
+   }
+   ],
+  [{<<".*">>, []}]}.

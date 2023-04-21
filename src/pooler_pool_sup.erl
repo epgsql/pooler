@@ -15,17 +15,57 @@ start_link(PoolConf) ->
     SupName = pool_sup_name(PoolConf),
     supervisor:start_link({local, SupName}, ?MODULE, PoolConf).
 
-init(PoolConf) ->
-    PoolerSpec = {pooler, {pooler, start_link, [PoolConf]}, transient, 5000, worker, [pooler]},
+init(PoolConf) when is_map(PoolConf) ->
+    PoolerSpec = #{
+        id => pooler,
+        start => {pooler, start_link, [PoolConf]},
+        restart => transient,
+        shutdown => 5000,
+        type => worker,
+        modules => [pooler]
+    },
     MemberSupName = member_sup_name(PoolConf),
     MemberSupSpec =
-        {MemberSupName, {pooler_pooled_worker_sup, start_link, [PoolConf]}, transient, 5000, supervisor, [
-            pooler_pooled_worker_sup
-        ]},
+        #{
+            id => MemberSupName,
+            start => {pooler_pooled_worker_sup, start_link, [PoolConf]},
+            restart => transient,
+            shutdown => 5000,
+            type => supervisor,
+            modules => [pooler_pooled_worker_sup]
+        },
 
     %% five restarts in 60 seconds, then shutdown
-    Restart = {one_for_all, 5, 60},
-    {ok, {Restart, [MemberSupSpec, PoolerSpec]}}.
+    Restart = #{strategy => one_for_all, intensity => 5, period => 60},
+    {ok, {Restart, [MemberSupSpec, PoolerSpec]}};
+init(PoolRecord) when is_tuple(PoolRecord), element(1, PoolRecord) =:= pool ->
+    %% This clause is for the hot code upgrade from pre-1.6.0;
+    %% can be removed when "upgrade-from-version" below 1.6.0 are removed from `pooler.appup.src'
+    {ok, PoolRecord1} = pooler:code_change(0, PoolRecord, []),
+    AsMap = pooler:to_map(PoolRecord1),
+    init(
+        maps:with(
+            [
+                name,
+                init_count,
+                max_count,
+                start_mfa,
+                group,
+                cull_interval,
+                max_age,
+                member_start_timeout,
+                queue_max,
+                metrics_api,
+                metrics_mod,
+                stop_mfa,
+                auto_grow_threshold,
+                add_member_retry,
+                metrics_mod,
+                metrics_api
+            ],
+            AsMap
+        )
+    ).
 
 -spec member_sup_name(pooler:pool_config()) -> atom().
 member_sup_name(#{name := Name}) ->

@@ -43,7 +43,7 @@
     call_free_members/2,
     call_free_members/3
 ]).
--export([create_group_table/0, config_as_map/1]).
+-export([create_group_table/0, config_as_map/1, to_map/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -58,6 +58,9 @@
     terminate/2,
     code_change/3
 ]).
+
+-vsn(2).
+%% Bump this value and add a new clause to `code_change', if the format of `#pool{}' record changed
 
 %% ------------------------------------------------------------------
 %% Types
@@ -606,7 +609,40 @@ terminate(_Reason, _State) ->
     ok.
 
 -spec code_change(_, _, _) -> {'ok', _}.
-code_change(_OldVsn, State, _Extra) ->
+code_change(
+    _OldVsn,
+    {pool, Name, Group, MaxCount, InitCount, StartMFA, FreePids, InUseCount, FreeCount, AddMemberRetry, CullInterval,
+        MaxAge, MemberSup, StarterSup, AllMembers, ConsumerToPid, StartingMembers, MemberStartTimeout,
+        AutoGrowThreshold, StopMFA, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax},
+    _Extra
+) ->
+    {ok, #pool{
+        cull_timer = undefined,
+        all_members = maps:from_list(dict:to_list(AllMembers)),
+        consumer_to_pid = maps:from_list(dict:to_list(ConsumerToPid)),
+        name = Name,
+        group = Group,
+        max_count = MaxCount,
+        init_count = InitCount,
+        start_mfa = StartMFA,
+        free_pids = FreePids,
+        in_use_count = InUseCount,
+        free_count = FreeCount,
+        add_member_retry = AddMemberRetry,
+        cull_interval = CullInterval,
+        max_age = MaxAge,
+        member_sup = MemberSup,
+        starter_sup = StarterSup,
+        starting_members = StartingMembers,
+        member_start_timeout = MemberStartTimeout,
+        auto_grow_threshold = AutoGrowThreshold,
+        stop_mfa = StopMFA,
+        metrics_mod = MetricsMod,
+        metrics_api = MetricsAPI,
+        queued_requestors = QueuedRequestors,
+        queue_max = QueueMax
+    }};
+code_change(_, State, _Extra) ->
     {ok, State}.
 
 %% ------------------------------------------------------------------
@@ -1311,6 +1347,7 @@ do_call_free_member(Fun, Pid) ->
             {error, Reason}
     end.
 
+%% @private
 to_map(#pool{} = Pool) ->
     [Name | Values] = tuple_to_list(Pool),
     maps:from_list(

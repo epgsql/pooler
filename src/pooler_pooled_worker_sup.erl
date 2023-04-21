@@ -10,7 +10,14 @@ start_link(#{start_mfa := MFA} = PoolConf) ->
     supervisor:start_link({local, SupName}, ?MODULE, MFA).
 
 init({Mod, Fun, Args}) ->
-    Worker = {Mod, {Mod, Fun, Args}, temporary, brutal_kill, worker, [Mod]},
+    Worker = #{
+        id => Mod,
+        start => {Mod, Fun, Args},
+        restart => temporary,
+        shutdown => brutal_kill,
+        type => worker,
+        modules => [Mod]
+    },
     Specs = [Worker],
-    Restart = {simple_one_for_one, 1, 1},
+    Restart = #{strategy => simple_one_for_one, intensity => 1, period => 1},
     {ok, {Restart, Specs}}.

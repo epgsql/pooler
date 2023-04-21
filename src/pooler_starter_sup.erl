@@ -20,7 +20,14 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    Worker = {pooler_starter, {pooler_starter, start_link, []}, temporary, brutal_kill, worker, [pooler_starter]},
+    Worker = #{
+        id => pooler_starter,
+        start => {pooler_starter, start_link, []},
+        restart => temporary,
+        shutdown => brutal_kill,
+        type => worker,
+        modules => [pooler_starter]
+    },
     Specs = [Worker],
-    Restart = {simple_one_for_one, 1, 1},
+    Restart = #{strategy => simple_one_for_one, intensity => 1, period => 1},
     {ok, {Restart, Specs}}.
