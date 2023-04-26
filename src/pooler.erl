@@ -65,7 +65,7 @@
 %% ------------------------------------------------------------------
 %% Types
 %% ------------------------------------------------------------------
--export_type([pool_config/0, pool_name/0, group_name/0, member_info/0, time_unit/0, time_spec/0]).
+-export_type([pool_config/0, pool_config_legacy/0, pool_name/0, group_name/0, member_info/0, time_unit/0, time_spec/0]).
 
 -define(DEFAULT_ADD_RETRY, 1).
 -define(DEFAULT_CULL_INTERVAL, {1, min}).
@@ -93,6 +93,7 @@
     %% returned by a call to take_member. NOTE: this value
     %% should be >= 2 or else the pool will not grow on demand
     %% when max_count is larger than init_count.
+    %% TODO: seems to be not in use anymore
     add_member_retry = ?DEFAULT_ADD_RETRY :: non_neg_integer(),
 
     %% The interval to schedule a cull message. Both
@@ -186,10 +187,13 @@
         add_member_retry => non_neg_integer()
     }.
 %% See {@link pooler:new_pool/1}
--type pool_config_legacy() :: [{atom, any()}].
+
+-type pool_config_legacy() :: [{atom(), any()}].
+%% Can be provided as a proplist, but is not recommended
 
 -type free_member_info() :: {reference(), free, erlang:timestamp()}.
 -type member_info() :: {reference(), free | pid(), erlang:timestamp()}.
+%% See {@link pool_stats/1}
 
 -type members_map() :: #{pid() => member_info()}.
 -type consumers_map() :: #{pid() => {reference(), [pid()]}}.
@@ -265,27 +269,46 @@ create_group_table() ->
 %% <dt>`group'</dt>
 %% <dd>An atom giving the name of the group this pool belongs
 %% to. Pools sharing a common `group' value can be accessed using
-%% {@link take_group_member/1} and {@link return_group_member/2}.</dd>
+%% {@link take_group_member/1}, {@link return_group_member/2} and {@link group_pools/1}.</dd>
 %% <dt>`cull_interval'</dt>
-%% <dd>Time between checks for stale pool members. Specified as
+%% <dd>Default: `{1, min}'. Time between checks for stale pool members. Specified as
 %% `{Time, Unit}' where `Time' is a non-negative integer and `Unit' is
-%% one of `min', `sec', `ms', or `mu'. The default value of `{1, min}'
-%% triggers a once per minute check to remove members that have not
+%% one of `min', `sec', `ms', or `mu'.
+%% Triggers a once per `cull_interval' check to remove members that have not
 %% been accessed in `max_age' time units. Culling can be disabled by
-%% specifying a zero time vaule (e.g. `{0, min}'. Culling will also be
+%% specifying a zero time vaule (e.g. `{0, min}'). Culling will also be
 %% disabled if `init_count' is the same as `max_count'.</dd>
 %% <dt>`max_age'</dt>
-%% <dd>Members idle longer than `max_age' time units are removed from
+%% <dd>Default: `{30, sec}'. Members idle longer than `max_age' time units are removed from
 %% the pool when stale checking is enabled via
 %% `cull_interval'. Culling of idle members will never reduce the pool
 %% below `init_count'. The value is specified as `{Time, Unit}'. Note
 %% that timers are not set on individual pool members and may remain
 %% in the pool beyond the configured `max_age' value since members are
-%% only removed on the interval configured via `cull_interval'. The
-%% default value is `{30, sec}'.</dd>
+%% only removed on the interval configured via `cull_interval'.</dd>
 %% <dt>`member_start_timeout'</dt>
-%% <dd>Time limit for member starts. Specified as `{Time,
-%% Unit}'. Defaults to `{1, min}'.</dd>
+%% <dd>Default: `{1, min}'. Time limit for member starts. Specified as `{Time, Unit}'.</dd>
+%% <dt>`queue_max'</dt>
+%% <dd>Default: 50. When pool is empty and client is asking for a member with timeout
+%% (using {@link take_member/2}), this client will be put into a "waiting queue", served in a FIFO order.
+%% This queue lenght is bound by `queue_max'. When queue is full, any new queries will instantly get
+%% `error_no_members'</dd>
+%% <dt>`metrics_api', `metrics_mod'</dt>
+%% <dd>Pooler can export some internal metrics. It currently can export using API similar to `folsom'
+%% or API similar to `exometer'. Use `metrics_api' to specify API style and `metrics_mod' to specify
+%% the module implementing this API.</dd>
+%% <dt>`stop_mfa'</dt>
+%% <dd>By default when `pooler' needs to terminate one of its workers (when it is returned with `fail' status
+%% or `max_age' is reached), pooler calls
+%% `supervisor:terminate_child(pooler_<pool name>_member_sup, <worker_pid>)'. If worker shutdown requires some
+%% more complex preparatons, a custom stop `{Module, Function, Arguments}' callback can be provided.
+%% `Arguments' can contain placeholders: `$pooler_pool_name' - name of the pool, `$pooler_pid' - pid of the worker to
+%% terminate. This callback have to terminate this process and remove it from pooler worker supervisor.</dd>
+%% <dt>`auto_grow_threshold'</dt>
+%% <dd>Default: `undefined' (disabled). Threshold at which more members (capped to `max_count') will be started
+%% if the number of free workers drops to this value - "anticipatory" behavior (start members before they're
+%% actually needed). Might be usefull when the worker initialization is relatively slow and we want to keep
+%% latency at minimum.</dd>
 %% </dl>
 -spec new_pool(pool_config() | pool_config_legacy()) -> {ok, pid()} | {error, {already_started, pid()}}.
 new_pool(PoolConfig) ->
@@ -329,7 +352,7 @@ rm_group_members(MemberPids) ->
         MemberPids
     ).
 
-%% @doc Get child spec described by the proplist `PoolConfig'.
+%% @doc Get child spec described by the `PoolConfig'.
 %%
 %% See {@link pooler:new_pool/1} for info about `PoolConfig'.
 -spec pool_child_spec(pool_config() | pool_config_legacy()) -> supervisor:child_spec().
@@ -456,7 +479,7 @@ return_member(_, error_no_members) ->
 %% @doc Obtain runtime state info for all workers.
 %%
 %% Format of the return value is subject to change.
--spec pool_stats(pool_name() | pid()) -> [{pid(), {reference(), free | pid(), erlang:timestamp()}}].
+-spec pool_stats(pool_name() | pid()) -> [{pid(), member_info()}].
 pool_stats(PoolName) ->
     gen_server:call(PoolName, pool_stats).
 
