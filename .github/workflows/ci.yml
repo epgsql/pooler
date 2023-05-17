@@ -10,31 +10,24 @@ jobs:
   ci:
     name: Run checks and tests over ${{matrix.otp}} and ${{matrix.os}}
     runs-on: ${{matrix.os}}
+    container:
+      image: erlang:${{ matrix.otp }}
 
     strategy:
       fail-fast: false
       matrix:
-        otp: ["25.3", "24.3"]
+        otp: ["26.0", "25.3", "24.3"]
         os: ["ubuntu-22.04"]
-        rebar3: ["3.20.0"]
         include:
           - otp: "23.3"
             os: "ubuntu-20.04"
-            rebar3: "3.17.0"
           - otp: "22.3"
             os: "ubuntu-20.04"
-            rebar3: "3.17.0"
           - otp: "21.3"
             os: "ubuntu-20.04"
-            rebar3: "3.15.2"
 
     steps:
       - uses: actions/checkout@v3
-
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{ matrix.otp }}
-          rebar3-version: ${{ matrix.rebar3 }}
 
       - name: Compile
         run: make
