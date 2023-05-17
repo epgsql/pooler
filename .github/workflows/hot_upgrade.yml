@@ -10,26 +10,26 @@ jobs:
   ci:
     name: Hot code upgrade from ${{ matrix.from_version }} on OTP-${{ matrix.otp }}
     runs-on: ${{matrix.os}}
+    container:
+      image: erlang:${{ matrix.otp }}
 
     strategy:
       fail-fast: true
       matrix:
         os: ["ubuntu-20.04"]
         otp: ["23.3"]
-        rebar3: ["3.17.0"]
         from_version:
             - "1.5.2"
             - "9c28fb479f9329e2a1644565a632bc222780f1b7"
 
     steps:
+      # This is to not have the git safe.directory failure
+      - name: Change owner of container working directory
+        run: chown root:root .
+
       - uses: actions/checkout@v3
         with:
             fetch-depth: 0
-
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{ matrix.otp }}
-          rebar3-version: ${{ matrix.rebar3 }}
 
       - name: Hot-upgrade
         run: make hotupgrade_setup BASE_REV=${{ matrix.from_version }} hotupgrade_check
