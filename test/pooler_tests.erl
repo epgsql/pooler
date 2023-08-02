@@ -1286,6 +1286,248 @@ no_error_logger_reports_after_culling_test_() ->
             end}
         ]}.
 
+reconfigure_test_() ->
+    Name = test_pool_1,
+    InitCount = 2,
+    MaxCount = 4,
+    StartConfig = #{
+        name => Name,
+        max_count => MaxCount,
+        init_count => InitCount,
+        start_mfa => {pooled_gs, start_link, [{reconfigure_test}]}
+    },
+    {foreach,
+        fun() ->
+            logger:set_handler_config(default, filters, []),
+            application:set_env(pooler, pools, [StartConfig]),
+            application:set_env(pooler, metrics_module, pooler_no_metrics),
+            application:start(pooler)
+        end,
+        fun(_) ->
+            application:unset_env(pooler, pools),
+            application:stop(pooler)
+        end,
+        [
+            {"Raise init_count", fun() ->
+                Config1 = StartConfig#{init_count => 3},
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {init_count, 3}},
+                        {start_workers, 1}
+                    ]},
+                    pooler:pool_reconfigure(Name, Config1)
+                ),
+                ?assertMatch(
+                    #{
+                        init_count := 3,
+                        free_count := 3,
+                        free_pids := [_, _, _]
+                    },
+                    wait_for_dump(Name, 5000, fun(#{free_count := C}) -> C =:= 3 end)
+                )
+            end},
+            {"Lower max_count", fun() ->
+                Config1 = StartConfig#{max_count => 1, init_count => 1},
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {init_count, 1}},
+                        {set_parameter, {max_count, 1}},
+                        {stop_free_workers, 1}
+                    ]},
+                    pooler:pool_reconfigure(Name, Config1)
+                ),
+                ?assertMatch(
+                    #{
+                        init_count := 1,
+                        max_count := 1,
+                        free_count := 1,
+                        free_pids := [_]
+                    },
+                    wait_for_dump(Name, 5000, fun(#{free_count := C}) -> C =:= 1 end)
+                )
+            end},
+            {"Lower queue_max", fun() ->
+                NewQMax = 4,
+                NewConfig = StartConfig#{queue_max => NewQMax},
+                Parent = self(),
+                NumClients = 10,
+                _Clients = lists:map(
+                    fun(_) ->
+                        spawn_link(
+                            fun() ->
+                                Parent ! pooler:take_member(Name, 60000),
+                                timer:sleep(60000)
+                            end
+                        )
+                    end,
+                    lists:seq(1, NumClients)
+                ),
+                timer:sleep(100),
+                % 6
+                QueueSize = NumClients - MaxCount,
+                %2
+                Shrink = QueueSize - NewQMax,
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {queue_max, NewQMax}},
+                        {shrink_queue, Shrink}
+                    ]},
+                    pooler:pool_reconfigure(Name, NewConfig)
+                ),
+                ?assertMatch(
+                    [
+                        W1,
+                        W2,
+                        W3,
+                        W4,
+                        error_no_members,
+                        error_no_members
+                    ] when
+                        is_pid(W1) andalso
+                            is_pid(W2) andalso
+                            is_pid(W3) andalso
+                            is_pid(W4),
+                    [
+                        receive
+                            M -> M
+                        after 5000 -> error(timeout)
+                        end
+                     || _ <- lists:seq(1, MaxCount + Shrink)
+                    ]
+                ),
+                #{
+                    queue_max := QMax,
+                    queued_requestors := Q
+                } = gen_server:call(Name, dump_pool),
+                % queue_max in the state is updated
+                ?assertEqual(QMax, NewQMax),
+                % queue is full
+                ?assertEqual(NewQMax, queue:len(Q))
+            end},
+            {"Lower cull_interval", fun() ->
+                NewConfig = StartConfig#{cull_interval => {10, sec}},
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {cull_interval, {10, sec}}},
+                        {reset_cull_timer, {10, sec}}
+                    ]},
+                    pooler:pool_reconfigure(Name, NewConfig)
+                )
+            end},
+            {"Lower max_age", fun() ->
+                NewConfig = StartConfig#{max_age => {100, ms}},
+                Workers = [pooler:take_member(Name, 5000) || _ <- lists:seq(1, MaxCount)],
+                [pooler:return_member(Name, Pid) || Pid <- Workers],
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {max_age, {100, ms}}},
+                        {cull, []}
+                    ]},
+                    pooler:pool_reconfigure(Name, NewConfig)
+                ),
+                %% make sure workers are culled
+                wait_for_dump(
+                    Name,
+                    1000,
+                    fun(#{free_count := Free}) ->
+                        Name ! cull_pool,
+                        Free =:= InitCount
+                    end
+                )
+            end},
+            {"Update group", fun() ->
+                NewConfig1 = StartConfig#{group => my_group1},
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {group, my_group1}},
+                        {join_group, my_group1}
+                    ]},
+                    pooler:pool_reconfigure(Name, NewConfig1)
+                ),
+                PoolPid = whereis(Name),
+                ?assertMatch([PoolPid], pooler:group_pools(my_group1)),
+                NewConfig2 = StartConfig#{group => my_group2},
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {group, my_group2}},
+                        {leave_group, my_group1},
+                        {join_group, my_group2}
+                    ]},
+                    pooler:pool_reconfigure(Name, NewConfig2)
+                ),
+                ?assertMatch([], pooler:group_pools(my_group1)),
+                ?assertMatch([PoolPid], pooler:group_pools(my_group2)),
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {group, undefined}},
+                        {leave_group, my_group2}
+                    ]},
+                    pooler:pool_reconfigure(Name, StartConfig)
+                ),
+                ?assertMatch([], pooler:group_pools(my_group1)),
+                ?assertMatch([], pooler:group_pools(my_group2))
+            end},
+            {"Change basic configs", fun() ->
+                NewMaxCount = MaxCount + 5,
+                NewConfig = StartConfig#{
+                    max_count => NewMaxCount,
+                    member_start_timeout => {10, sec},
+                    queue_max => 100,
+                    metrics_mod => fake_metrics,
+                    stop_mfa => {erlang, exit, ['$pooler_pid', shutdown]},
+                    auto_grow_threshold => 1
+                },
+                ?assertEqual(
+                    {ok, [
+                        {set_parameter, {max_count, NewMaxCount}},
+                        {set_parameter, {member_start_timeout, {10, sec}}},
+                        {set_parameter, {queue_max, 100}},
+                        {set_parameter, {metrics_mod, fake_metrics}},
+                        {set_parameter, {stop_mfa, {erlang, exit, ['$pooler_pid', shutdown]}}},
+                        {set_parameter, {auto_grow_threshold, 1}}
+                    ]},
+                    pooler:pool_reconfigure(Name, NewConfig)
+                ),
+                ?assertMatch(
+                    #{
+                        max_count := NewMaxCount,
+                        member_start_timeout := {10, sec},
+                        queue_max := 100,
+                        metrics_mod := fake_metrics,
+                        stop_mfa := {erlang, exit, ['$pooler_pid', shutdown]},
+                        auto_grow_threshold := 1
+                    },
+                    gen_server:call(Name, dump_pool)
+                )
+            end},
+            {"Update failed", fun() ->
+                ?assertEqual(
+                    {error, changed_unsupported_parameter},
+                    pooler:pool_reconfigure(
+                        Name, StartConfig#{start_mfa := {erlang, spawn, [a, b, []]}}
+                    )
+                ),
+                ?assertEqual(
+                    {error, changed_unsupported_parameter},
+                    pooler:pool_reconfigure(
+                        Name, StartConfig#{name := not_a_pool_name}
+                    )
+                )
+            end}
+        ]}.
+
+wait_for_dump(Pool, Timeout, Fun) when Timeout > 0 ->
+    Dump = gen_server:call(Pool, dump_pool),
+    case Fun(Dump) of
+        true ->
+            Dump;
+        false ->
+            timer:sleep(50),
+            wait_for_dump(Pool, Timeout - 50, Fun)
+    end;
+wait_for_dump(_, _, _) ->
+    error(timeout).
+
 monitor_members_trigger_culling_and_return_reason() ->
     Pids = get_n_pids(test_pool_1, 3, []),
     [erlang:monitor(process, P) || P <- Pids],
