@@ -112,7 +112,7 @@ and one pool talking to a Postgresql database:
                       max_count => 10,
                       init_count => 2,
                       start_mfa =>
-                       {my_pg_sql_driver, start_link, ["db_host"]}}
+                       {epgsql, connect, [#{host => "localhost", username => "user", database => "base"}]}}
                    ]}
              %% if you want to enable metrics, set this to a module with
              %% an API conformant to the folsom_metrics module.
@@ -170,6 +170,20 @@ PoolConfig = #{
 },
 pooler:new_pool(PoolConfig).
 #+END_SRC
+*** Dynamic pool reconfiguration
+Pool configuration can be changed in runtime
+
+#+BEGIN_SRC erlang
+pooler:pool_reconfigure(rc8081, PoolConfig#{max_count => 10, init_count => 4}).
+#+END_SRC
+
+It will update the pool's state and will start/stop workers if necessary, join/leave group,
+reschedule the cull timer etc.
+The only parameters that can't be updated are ~name~ and ~start_mfa~.
+
+However, updated configuration won't survive pool crash (it will be restarted with old config by
+supervisor). But this should not normally happen.
+
 *** Using pooler
 
 Here's an example session:
