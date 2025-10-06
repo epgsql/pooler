@@ -16,11 +16,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: ["ubuntu-20.04"]
-        otp: ["23.3"]
+        os: ["ubuntu-22.04"]
+        otp: ["27.3"]
         from_version:
             - "1.5.2"
-            - "9c28fb479f9329e2a1644565a632bc222780f1b7"
 
     steps:
       # This is to not have the git safe.directory failure

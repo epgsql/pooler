@@ -16,15 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ["26.0", "25.3", "24.3"]
+        otp: ["28.1", "27.3", "26.2", "25.3", "24.3"]
         os: ["ubuntu-22.04"]
-        include:
-          - otp: "23.3"
-            os: "ubuntu-20.04"
-          - otp: "22.3"
-            os: "ubuntu-20.04"
-          - otp: "21.3"
-            os: "ubuntu-20.04"
 
     steps:
       - uses: actions/checkout@v3
@@ -34,7 +27,6 @@ jobs:
 
       - name: xref
         run: make xref
-        if: ${{ matrix.otp != '23.3' }}
 
       - name: Code formatter validation
         run: make format_check

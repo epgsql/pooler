@@ -1671,20 +1671,6 @@ starting_members(PoolName) ->
 dump_pool(PoolName) ->
     gen_server:call(PoolName, dump_pool).
 
-% >= OTP-21
--ifdef(OTP_RELEASE).
--if(?OTP_RELEASE >= 23).
--define(USE_PG_NOT_PG2, true).
--else.
--undef(USE_PG_NOT_PG2).
--endif.
-% < OTP-21
--else.
--undef(USE_PG_NOT_PG2).
--endif.
-
--ifdef(USE_PG_NOT_PG2).
-
 pg_start() ->
     pg:start(_Scope = 'pg').
 
@@ -1696,16 +1682,3 @@ pg_stop() ->
 
 pg_leave(Group, Pid) ->
     pg:leave(Group, Pid).
-
--else.
-
-pg_start() ->
-    pg2:start().
-
-pg_stop() ->
-    application:stop(pg2).
-
-pg_leave(Group, Pid) ->
-    pg2:leave(Group, Pid).
-
--endif.

@@ -413,10 +413,5 @@ pool_is_free(Pool, NumWorkers) ->
     ),
     true.
 
--if(?OTP_RELEASE >= 23).
 pg_start() ->
     pg:start(pg).
--else.
-pg_start() ->
-    pg2:start().
--endif.

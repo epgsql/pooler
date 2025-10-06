@@ -55,7 +55,9 @@ do_check() {
         echo $RES2 >&2
         exit 1
     fi
-    ./_build/test/rel/pooler_test/bin/pooler_test stop
+    ./_build/test/rel/pooler_test/bin/pooler_test versions
+    # ./_build/test/rel/pooler_test/bin/pooler_test stop  # hangs on GitHub Actions CI for some reason
+    ./_build/test/rel/pooler_test/bin/pooler_test eval 'init:stop().'
 }
 
 "do_$COMMAND"

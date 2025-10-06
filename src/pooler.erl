@@ -1609,20 +1609,6 @@ config_as_map(Conf) when is_map(Conf) ->
 config_as_map(LegacyConf) when is_list(LegacyConf) ->
     maps:from_list(LegacyConf).
 
-% >= OTP-21
--ifdef(OTP_RELEASE).
--if(?OTP_RELEASE >= 23).
--define(USE_PG_NOT_PG2, true).
--else.
--undef(USE_PG_NOT_PG2).
--endif.
-% < OTP-21
--else.
--undef(USE_PG_NOT_PG2).
--endif.
-
--ifdef(USE_PG_NOT_PG2).
-
 pg_get_local_members(GroupName) ->
     pg:get_local_members(GroupName).
 
@@ -1637,25 +1623,3 @@ pg_join(Group, Pid) ->
 
 pg_leave(Group, Pid) ->
     pg:leave(Group, Pid).
-
--else.
-
-pg_get_local_members(GroupName) ->
-    case pg2:get_local_members(GroupName) of
-        {error, {no_such_group, GroupName}} -> [];
-        Pids -> Pids
-    end.
-
-pg_delete(GroupName) ->
-    pg2:delete(GroupName).
-
-pg_create(Group) ->
-    pg2:create(Group).
-
-pg_join(Group, Pid) ->
-    pg2:join(Group, Pid).
-
-pg_leave(Group, Pid) ->
-    pg2:leave(Group, Pid).
-
--endif.
