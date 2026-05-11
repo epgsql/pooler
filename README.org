@@ -361,12 +361,13 @@ Ensure the metrics library is in your code path and has been started before pool
 
 When enabled, the following metrics will be tracked:
 
-| Metric Label                  | Description                                                                 |
-| pooler.POOL_NAME.take_rate    | meter recording rate at which take_member is called                         |
-| pooler.error_no_members_count | counter indicating how many times take_member has returned error_no_members |
-| pooler.killed_free_count      | counter how many members have been killed when in the free state            |
-| pooler.killed_in_use_count    | counter how many members have been killed when in the in_use state          |
-| pooler.event                  | history various error conditions                                            |
+| Metric Label                       | Description                                                                 |
+| pooler.POOL_NAME.take_rate         | meter recording rate at which take_member is called                         |
+| pooler.POOL_NAME.stopping_count    | histogram tracking number of members currently being stopped asynchronously |
+| pooler.error_no_members_count      | counter indicating how many times take_member has returned error_no_members |
+| pooler.killed_free_count           | counter how many members have been killed when in the free state            |
+| pooler.killed_in_use_count         | counter how many members have been killed when in the in_use state          |
+| pooler.event                       | history various error conditions                                            |
 
 *** Demo Quick Start
 

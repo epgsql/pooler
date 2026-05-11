@@ -1,19 +1,24 @@
 %% @doc Simple one for one supervisor for pooler_starter.
 %%
 %% This supervisor is shared by all pools since pooler_starter is a
-%% generic helper to fasciliate async member start.
+%% generic helper to facilitate async member lifecycle (start and stop).
 -module(pooler_starter_sup).
 
 -behaviour(supervisor).
 
 -export([
     new_starter/1,
+    new_stopper/1,
     start_link/0,
     init/1
 ]).
 
 -spec new_starter(pooler_starter:start_spec()) -> {ok, pid()}.
 new_starter(Spec) ->
+    supervisor:start_child(?MODULE, [Spec]).
+
+-spec new_stopper(pooler_starter:stop_spec()) -> {ok, pid()}.
+new_stopper(Spec) ->
     supervisor:start_child(?MODULE, [Spec]).
 
 start_link() ->
