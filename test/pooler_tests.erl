@@ -1516,6 +1516,64 @@ reconfigure_test_() ->
             end}
         ]}.
 
+pooler_initialize_mfa_test_() ->
+    BasePool = #{
+        name => test_pool_1,
+        max_count => 3,
+        init_count => 2,
+        start_mfa => {pooled_gs, start_link, [{init_mfa_type}]}
+    },
+    {foreach, fun() -> ok end,
+        fun(_) ->
+            application:stop(pooler)
+        end,
+        [
+            {"members are usable when initialize_mfa succeeds", fun() ->
+                ok = pooler:start(),
+                pooler:new_pool(BasePool#{
+                    initialize_mfa => {pooled_gs, initialize, ['$pooler_pid']}
+                }),
+                Pid = pooler:take_member(test_pool_1),
+                ?assertNotEqual(error_no_members, Pid),
+                ?assertEqual(pong, pooled_gs:ping(Pid)),
+                pooler:return_member(test_pool_1, Pid)
+            end},
+            {"member is not accepted when initialize_mfa returns error", fun() ->
+                ok = pooler:start(),
+                pooler:new_pool(BasePool#{
+                    initialize_mfa => {pooled_gs, initialize_fail, ['$pooler_pid']}
+                }),
+                ?assertEqual(error_no_members, pooler:take_member(test_pool_1))
+            end},
+            {"member is not accepted when initialize_mfa raises an exception", fun() ->
+                ok = pooler:start(),
+                pooler:new_pool(BasePool#{
+                    initialize_mfa => {pooled_gs, initialize_crash, ['$pooler_pid']}
+                }),
+                ?assertEqual(error_no_members, pooler:take_member(test_pool_1))
+            end},
+            {"member is not accepted when initialize_mfa kills the worker", fun() ->
+                ok = pooler:start(),
+                pooler:new_pool(BasePool#{
+                    initialize_mfa => {pooled_gs, error_on_call, ['$pooler_pid']}
+                }),
+                ?assertEqual(error_no_members, pooler:take_member(test_pool_1))
+            end},
+            {"initialize_mfa can be updated via pool_reconfigure", fun() ->
+                ok = pooler:start(),
+                pooler:new_pool(BasePool),
+                InitMFA = {pooled_gs, initialize, ['$pooler_pid']},
+                {ok, Actions} = pooler:pool_reconfigure(test_pool_1, BasePool#{
+                    initialize_mfa => InitMFA
+                }),
+                ?assertEqual([{set_parameter, {initialize_mfa, InitMFA}}], Actions),
+                ?assertMatch(
+                    #{initialize_mfa := InitMFA},
+                    gen_server:call(test_pool_1, dump_pool)
+                )
+            end}
+        ]}.
+
 wait_for_dump(Pool, Timeout, Fun) when Timeout > 0 ->
     Dump = gen_server:call(Pool, dump_pool),
     case Fun(Dump) of

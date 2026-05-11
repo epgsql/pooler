@@ -22,7 +22,10 @@
     crash/1,
     error_on_call/1,
     do_work/2,
-    stop/1
+    stop/1,
+    initialize/1,
+    initialize_fail/1,
+    initialize_crash/1
 ]).
 
 %% ------------------------------------------------------------------
@@ -76,6 +79,16 @@ error_on_call(S) ->
 
 stop(S) ->
     gen_server:call(S, stop).
+
+initialize(Pid) ->
+    pong = gen_server:call(Pid, ping),
+    ok.
+
+initialize_fail(_Pid) ->
+    {error, initialization_failed}.
+
+initialize_crash(_Pid) ->
+    erlang:error(initialization_crashed).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
