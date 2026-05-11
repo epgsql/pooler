@@ -75,9 +75,7 @@
 -define(DEFAULT_AUTO_GROW_THRESHOLD, undefined).
 -define(POOLER_GROUP_TABLE, pooler_group_table).
 -define(DEFAULT_POOLER_QUEUE_MAX, 50).
--define(POOLER_POOL_NAME, '$pooler_pool_name').
--define(POOLER_PID, '$pooler_pid').
--define(DEFAULT_STOP_MFA, {supervisor, terminate_child, [?POOLER_POOL_NAME, ?POOLER_PID]}).
+-define(DEFAULT_STOP_MFA, {supervisor, terminate_child, ['$pooler_pool_name', '$pooler_pid']}).
 
 -record(pool, {
     name :: atom(),
@@ -150,7 +148,7 @@
     %% returns but before the member is accepted into the pool. Use this to
     %% perform slow initialization (e.g. a network handshake) outside the
     %% member supervisor, so concurrent starts do not serialize through it.
-    %% Arguments may contain the placeholder '$pooler_pid'.
+    %% Arguments may contain the placeholders '$pooler_pid' and '$pooler_pool_name'.
     %% Must return 'ok' on success or '{error, Reason}' on failure.
     initialize_mfa = undefined :: undefined | {atom(), atom(), [term()]},
 
@@ -192,7 +190,7 @@
         metrics_api => folsom | exometer,
         metrics_mod => module(),
         stop_mfa => {module(), atom(), ['$pooler_pid' | any(), ...]},
-        initialize_mfa => {module(), atom(), ['$pooler_pid' | any(), ...]},
+        initialize_mfa => {module(), atom(), ['$pooler_pid' | '$pooler_pool_name' | any(), ...]},
         auto_grow_threshold => non_neg_integer(),
         add_member_retry => non_neg_integer()
     }.
@@ -220,7 +218,7 @@
         | {metrics_api, folsom | exometer}
         | {metrics_mod, module()}
         | {stop_mfa, {module(), atom(), ['$pooler_pid' | any(), ...]}}
-        | {initialize_mfa, undefined | {module(), atom(), ['$pooler_pid' | any(), ...]}}
+        | {initialize_mfa, undefined | {module(), atom(), ['$pooler_pid' | '$pooler_pool_name' | any(), ...]}}
         | {auto_grow_threshold, non_neg_integer()}}.
 
 -type free_member_info() :: {reference(), free, erlang:timestamp()}.
@@ -1565,26 +1563,12 @@ maybe_reply({Member, NewPool}) ->
 %% default callback.
 -spec terminate_pid(atom(), pid(), {atom(), atom(), [term()]}) -> ok.
 terminate_pid(PoolName, Pid, {Mod, Fun, Args}) when is_list(Args) ->
-    NewArgs = replace_placeholders(PoolName, Pid, Args),
-    case catch erlang:apply(Mod, Fun, NewArgs) of
-        {'EXIT', _} ->
-            terminate_pid(PoolName, Pid, ?DEFAULT_STOP_MFA);
-        _Result ->
-            ok
+    NewArgs = pooler_starter:replace_placeholders(PoolName, Pid, Args),
+    try erlang:apply(Mod, Fun, NewArgs) of
+        _ -> ok
+    catch
+        _:_ -> terminate_pid(PoolName, Pid, ?DEFAULT_STOP_MFA)
     end.
-
-replace_placeholders(Name, Pid, Args) ->
-    [
-        case Arg of
-            ?POOLER_POOL_NAME ->
-                pooler_pool_sup:build_member_sup_name(Name);
-            ?POOLER_PID ->
-                Pid;
-            _ ->
-                Arg
-        end
-     || Arg <- Args
-    ].
 
 compute_utilization(#pool{
     max_count = MaxCount,

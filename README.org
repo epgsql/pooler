@@ -205,9 +205,10 @@ returns quickly (so the supervisor is not blocked) but some slow work — such a
 a TCP handshake or a database login — still needs to happen before the member
 is safe to use.
 
-The value is an ={M, F, A}= tuple.  Before calling, pooler replaces the atom
-='$pooler_pid'= anywhere in =A= with the pid of the newly started member, so
-you can pass the pid to your callback without hard-coding it:
+The value is an ={M, F, A}= tuple.  Before calling, pooler replaces placeholder
+atoms in =A=: ='$pooler_pid'= with the pid of the newly started member, and
+='$pooler_pool_name'= with the member supervisor name for the pool (same
+placeholders supported by =stop_mfa=):
 
 #+BEGIN_SRC erlang
 #{name => pg_pool,

@@ -7,6 +7,9 @@
 
 -include_lib("kernel/include/logger.hrl").
 
+-define(POOLER_POOL_NAME, '$pooler_pool_name').
+-define(POOLER_PID, '$pooler_pid').
+
 %% ------------------------------------------------------------------
 %% API Function Exports
 %% ------------------------------------------------------------------
@@ -17,7 +20,8 @@
     start_member/3,
     start_member/4,
     stop_member_async/1,
-    stop/1
+    stop/1,
+    replace_placeholders/3
 ]).
 
 %% ------------------------------------------------------------------
@@ -156,7 +160,7 @@ code_change(_OldVsn, State, _Extra) ->
 do_start_member(PoolSup, PoolName, InitMFA) ->
     case supervisor:start_child(PoolSup, []) of
         {ok, Pid} ->
-            case call_initialize_mfa(Pid, InitMFA) of
+            case call_initialize_mfa(PoolName, Pid, InitMFA) of
                 ok ->
                     {self(), Pid};
                 Error ->
@@ -175,22 +179,28 @@ do_start_member(PoolSup, PoolName, InitMFA) ->
             {self(), Error}
     end.
 
--spec call_initialize_mfa(pid(), initialize_mfa()) -> ok | {error, term()}.
-call_initialize_mfa(_Pid, undefined) ->
-    ok;
-call_initialize_mfa(Pid, {Mod, Fun, Args}) ->
-    NewArgs = [
-        case A of
-            '$pooler_pid' -> Pid;
-            _ -> A
+-spec replace_placeholders(pooler:pool_name(), pid(), [term()]) -> [term()].
+replace_placeholders(PoolName, Pid, Args) ->
+    [
+        case Arg of
+            ?POOLER_POOL_NAME -> pooler_pool_sup:build_member_sup_name(PoolName);
+            ?POOLER_PID -> Pid;
+            _ -> Arg
         end
-     || A <- Args
-    ],
-    case catch erlang:apply(Mod, Fun, NewArgs) of
+     || Arg <- Args
+    ].
+
+-spec call_initialize_mfa(pooler:pool_name(), pid(), initialize_mfa()) -> ok | {error, term()}.
+call_initialize_mfa(_PoolName, _Pid, undefined) ->
+    ok;
+call_initialize_mfa(PoolName, Pid, {Mod, Fun, Args}) ->
+    NewArgs = replace_placeholders(PoolName, Pid, Args),
+    try erlang:apply(Mod, Fun, NewArgs) of
         ok -> ok;
         {error, _} = Err -> Err;
-        {'EXIT', Reason} -> {error, {initialize_mfa_exit, Reason}};
         Other -> {error, {unexpected_initialize_mfa_return, Other}}
+    catch
+        _:Reason -> {error, {initialize_mfa_exit, Reason}}
     end.
 
 -spec send_accept_member(parent(), pooler:pool_name(), start_result()) -> ok.
