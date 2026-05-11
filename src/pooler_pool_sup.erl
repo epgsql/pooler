@@ -58,6 +58,7 @@ init(PoolRecord) when is_tuple(PoolRecord), element(1, PoolRecord) =:= pool ->
                 metrics_api,
                 metrics_mod,
                 stop_mfa,
+                initialize_mfa,
                 auto_grow_threshold,
                 add_member_retry,
                 metrics_mod,

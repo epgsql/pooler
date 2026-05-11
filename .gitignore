@@ -27,3 +27,4 @@ bench/deps
 erlang_ls.config
 
 /rebar3
+/.agent-shell/

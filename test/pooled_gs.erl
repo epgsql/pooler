@@ -22,7 +22,11 @@
     crash/1,
     error_on_call/1,
     do_work/2,
-    stop/1
+    stop/1,
+    initialize/1,
+    initialize_fail/1,
+    initialize_crash/1,
+    initialize_kill_worker/1
 ]).
 
 %% ------------------------------------------------------------------
@@ -77,6 +81,19 @@ error_on_call(S) ->
 stop(S) ->
     gen_server:call(S, stop).
 
+initialize(Pid) ->
+    pong = gen_server:call(Pid, ping),
+    ok.
+
+initialize_fail(_Pid) ->
+    {error, initialization_failed}.
+
+initialize_crash(_Pid) ->
+    erlang:error(initialization_crashed).
+
+initialize_kill_worker(Pid) ->
+    gen_server:call(Pid, crash).
+
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
@@ -105,6 +122,8 @@ handle_call(ping_count, _From, #state{ping_count = C} = State) ->
     {reply, C, State};
 handle_call(error_on_call, _From, _State) ->
     erlang:error({pooled_gs, requested_error});
+handle_call(crash, _From, _State) ->
+    erlang:error({pooled_gs, requested_crash});
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(_Request, _From, State) ->

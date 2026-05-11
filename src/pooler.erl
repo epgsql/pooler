@@ -146,6 +146,14 @@
     %% The list of arguments must contain the fixed atom '$pooler_pid'.
     stop_mfa = ?DEFAULT_STOP_MFA :: {atom(), atom(), [term()]},
 
+    %% Optional callback invoked by pooler_starter after supervisor:start_child
+    %% returns but before the member is accepted into the pool. Use this to
+    %% perform slow initialization (e.g. a network handshake) outside the
+    %% member supervisor, so concurrent starts do not serialize through it.
+    %% Arguments may contain the placeholder '$pooler_pid'.
+    %% Must return 'ok' on success or '{error, Reason}' on failure.
+    initialize_mfa = undefined :: undefined | {atom(), atom(), [term()]},
+
     %% The module to use for collecting metrics. If set to
     %% 'pooler_no_metrics', then metric sending calls do
     %% nothing. A typical value to actually capture metrics is
@@ -184,6 +192,7 @@
         metrics_api => folsom | exometer,
         metrics_mod => module(),
         stop_mfa => {module(), atom(), ['$pooler_pid' | any(), ...]},
+        initialize_mfa => {module(), atom(), ['$pooler_pid' | any(), ...]},
         auto_grow_threshold => non_neg_integer(),
         add_member_retry => non_neg_integer()
     }.
@@ -211,6 +220,7 @@
         | {metrics_api, folsom | exometer}
         | {metrics_mod, module()}
         | {stop_mfa, {module(), atom(), ['$pooler_pid' | any(), ...]}}
+        | {initialize_mfa, undefined | {module(), atom(), ['$pooler_pid' | any(), ...]}}
         | {auto_grow_threshold, non_neg_integer()}}.
 
 -type free_member_info() :: {reference(), free, erlang:timestamp()}.
@@ -567,6 +577,7 @@ init(#{name := Name, max_count := MaxCount, init_count := InitCount, start_mfa :
         member_start_timeout = maps:get(member_start_timeout, P, ?DEFAULT_MEMBER_START_TIMEOUT),
         auto_grow_threshold = maps:get(auto_grow_threshold, P, ?DEFAULT_AUTO_GROW_THRESHOLD),
         stop_mfa = maps:get(stop_mfa, P, ?DEFAULT_STOP_MFA),
+        initialize_mfa = maps:get(initialize_mfa, P, undefined),
         metrics_mod = maps:get(metrics_mod, P, pooler_no_metrics),
         metrics_api = maps:get(metrics_api, P, folsom),
         queue_max = maps:get(queue_max, P, ?DEFAULT_POOLER_QUEUE_MAX)
@@ -864,11 +875,11 @@ accumulate_starting_member_not_stale(Pool, Now, SM = {Pid, StartTime}, MaxAgeSec
             AccIn
     end.
 
-init_members_sync(N, #pool{name = PoolName, member_sup = MemberSup} = Pool) ->
+init_members_sync(N, #pool{name = PoolName, member_sup = MemberSup, initialize_mfa = InitMFA} = Pool) ->
     Self = self(),
     StartTime = os:timestamp(),
     StartRefs = [
-        {pooler_starter:start_member(PoolName, MemberSup, Self), StartTime}
+        {pooler_starter:start_member(PoolName, MemberSup, Self, InitMFA), StartTime}
      || _I <- lists:seq(1, N)
     ],
     Pool1 = Pool#pool{starting_members = StartRefs},
@@ -987,10 +998,13 @@ take_member_from_pool_queued(
 %% @doc Add `Count' members to `Pool' asynchronously. Returns updated
 %% `Pool' record with starting member refs added to field
 %% `starting_members'.
-add_members_async(Count, #pool{name = PoolName, member_sup = MemberSup, starting_members = StartingMembers} = Pool) ->
+add_members_async(
+    Count,
+    #pool{name = PoolName, member_sup = MemberSup, starting_members = StartingMembers, initialize_mfa = InitMFA} = Pool
+) ->
     StartTime = os:timestamp(),
     StartRefs = [
-        {pooler_starter:start_member(PoolName, MemberSup), StartTime}
+        {pooler_starter:start_member(PoolName, MemberSup, InitMFA), StartTime}
      || _I <- lists:seq(1, Count)
     ],
     Pool#pool{starting_members = StartRefs ++ StartingMembers}.
@@ -1248,6 +1262,7 @@ calculate_reconfigure_actions(
         member_start_timeout => ?DEFAULT_MEMBER_START_TIMEOUT,
         auto_grow_threshold => ?DEFAULT_AUTO_GROW_THRESHOLD,
         stop_mfa => ?DEFAULT_STOP_MFA,
+        initialize_mfa => undefined,
         metrics_mod => pooler_no_metrics,
         metrics_api => folsom,
         queue_max => ?DEFAULT_POOLER_QUEUE_MAX
@@ -1269,6 +1284,7 @@ calculate_reconfigure_actions(
                 metrics_api,
                 metrics_mod,
                 stop_mfa,
+                initialize_mfa,
                 auto_grow_threshold
             ]
         )
@@ -1367,6 +1383,8 @@ mk_rec_action(metrics_mod = P, New, _, #pool{metrics_mod = Old}) when New =/= Ol
     [{set_parameter, {P, New}}];
 mk_rec_action(stop_mfa = P, New, _, #pool{stop_mfa = Old}) when New =/= Old ->
     [{set_parameter, {P, New}}];
+mk_rec_action(initialize_mfa = P, New, _, #pool{initialize_mfa = Old}) when New =/= Old ->
+    [{set_parameter, {P, New}}];
 mk_rec_action(auto_grow_threshold = P, New, _, #pool{auto_grow_threshold = Old}) when New =/= Old ->
     [{set_parameter, {P, New}}];
 mk_rec_action(_Param, _NewVal, _, _Pool) ->
@@ -1420,6 +1438,8 @@ set_parameter(metrics_mod, Value, Pool) ->
     Pool#pool{metrics_mod = Value};
 set_parameter(stop_mfa, Value, Pool) ->
     Pool#pool{stop_mfa = Value};
+set_parameter(initialize_mfa, Value, Pool) ->
+    Pool#pool{initialize_mfa = Value};
 set_parameter(auto_grow_threshold, Value, Pool) ->
     Pool#pool{auto_grow_threshold = Value}.
 
