@@ -114,10 +114,9 @@ and one pool talking to a Postgresql database:
                       start_mfa =>
                        {epgsql, connect, [#{host => "localhost", username => "user", database => "base"}]}}
                    ]}
-             %% if you want to enable metrics, set this to a module with
-             %% an API conformant to the folsom_metrics module.
-             %% If this config is missing, then no metrics are sent.
-             %% {metrics_module, folsom_metrics}
+             %% optional: enable metrics via folsom or exometer
+             %% metrics_mod => folsom_metrics,
+             %% metrics_api => folsom
           ]}
   ].
 #+END_SRC
@@ -156,6 +155,97 @@ During a check, pool members that have not been used in more than
 The default value for =cull_interval= is ={1, min}=. You can disable
 culling by specifying a value os ={0, min}=. The =max_age= parameter
 defaults to ={30, sec}=.
+
+**** Member start timeout (member_start_timeout)
+
+The =member_start_timeout= parameter sets how long pooler will wait for a
+member to be started before giving up on it.  If a starter process takes longer
+than this, the starter is killed and the partially-started member is discarded.
+The value is a =time_spec()= tuple; the default is ={1, min}=.
+
+#+BEGIN_SRC erlang
+#{member_start_timeout => {30, sec}}
+#+END_SRC
+
+**** Request queue limit (queue_max)
+
+When all pool members are in use, =take_member= calls are queued up to
+=queue_max= entries (default =50=).  Callers beyond this limit receive
+=error_no_members= immediately rather than waiting.  Set it to =0= to disable
+queuing entirely.
+
+#+BEGIN_SRC erlang
+#{queue_max => 100}
+#+END_SRC
+
+**** Proactive growth (auto_grow_threshold)
+
+By default, pooler only starts new members on demand — when a consumer calls
+=take_member= and the pool is exhausted.  Setting =auto_grow_threshold= to a
+non-negative integer causes pooler to start a new member proactively whenever
+the number of in-use members exceeds the threshold.  This can help keep latency
+low by warming up spare capacity before the pool is fully exhausted.  Disabled
+by default (=undefined=).
+
+This option only has an effect on dynamic-sized pools (i.e. =max_count= >
+=init_count=); in a fixed-size pool there are no spare slots to grow into.
+
+#+BEGIN_SRC erlang
+#{init_count => 5,
+  max_count => 20,
+  auto_grow_threshold => 8}   %% start a new member when 9+ are in use
+#+END_SRC
+
+**** Custom member initialization (initialize_mfa)
+
+The =initialize_mfa= pool configuration parameter allows you to run custom
+initialization logic after a member process has been started but before it is
+made available to consumers.  This is useful when the member's =start_link=
+returns quickly (so the supervisor is not blocked) but some slow work — such as
+a TCP handshake or a database login — still needs to happen before the member
+is safe to use.
+
+The value is an ={M, F, A}= tuple.  Before calling, pooler replaces placeholder
+atoms in =A=: ='$pooler_pid'= with the pid of the newly started member, and
+='$pooler_pool_name'= with the member supervisor name for the pool (same
+placeholders supported by =stop_mfa=):
+
+#+BEGIN_SRC erlang
+#{name => pg_pool,
+  max_count => 10,
+  init_count => 2,
+  start_mfa => {my_conn, start_link, []},
+  initialize_mfa => {my_conn, handshake, ['$pooler_pid']}}
+#+END_SRC
+
+The callback must return =ok= on success.  If it returns ={error, Reason}=,
+raises an exception, or the member process dies during initialization, the
+member is terminated and never added to the pool.  Pooler will log an error but
+will not retry; the pool simply starts with fewer members than =init_count=
+until the next growth event.
+
+The option is also accepted by =pooler:pool_reconfigure/2=.
+
+**** Custom member termination (stop_mfa)
+
+By default, pooler removes a pool member by calling
+=supervisor:terminate_child/2=, which is a synchronous call to the member
+supervisor.  If your members perform slow teardown (e.g. sending a goodbye
+frame over a network connection), this can block the pool gen_server while the
+supervisor is busy.
+
+The =stop_mfa= pool configuration parameter lets you override this.  It follows
+the same ={M, F, A}= convention with the ='$pooler_pid'= placeholder:
+
+#+BEGIN_SRC erlang
+#{name => pg_pool,
+  ...
+  stop_mfa => {my_conn, close, ['$pooler_pid']}}
+#+END_SRC
+
+The callback is called instead of =supervisor:terminate_child/2=.  If you want
+teardown to be fully asynchronous (fire-and-forget), make your callback send a
+message rather than blocking.
 
 *** Pool Configuration via =pooler:new_pool=
 You can create pools using =pooler:new_pool/1= when accepts a
@@ -252,11 +342,22 @@ PoolerSup = {pooler_sup, {pooler_sup, start_link, []},
 #+END_SRC
 
 *** Metrics
-You can enable metrics collection by adding a =metrics_module= entry
-to pooler's app config. Metrics are disabled by default. The module
-specified must have an API matching that of the [[https://github.com/boundary/folsom/blob/master/src/folsom_metrics.erl][folsom_metrics]] module
-in [[https://github.com/boundary/folsom][folsom]] (to use folsom, specify ={metrics_module, folsom_metrics}}=
-and ensure that folsom is in your code path and has been started.
+You can enable metrics collection by setting =metrics_mod= and =metrics_api= in
+the pool config (or the =pooler= application environment).  Metrics are
+disabled by default.
+
+=metrics_api= selects the backend API: =folsom= (default when =metrics_mod= is
+set) or =exometer=.  =metrics_mod= is the module that implements the chosen API
+— e.g. =folsom_metrics= for folsom, or a custom module with a compatible interface.
+
+#+BEGIN_SRC erlang
+#{name => my_pool,
+  ...,
+  metrics_mod => folsom_metrics,
+  metrics_api => folsom}
+#+END_SRC
+
+Ensure the metrics library is in your code path and has been started before pooler.
 
 When enabled, the following metrics will be tracked:
 
