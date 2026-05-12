@@ -164,6 +164,15 @@ do_start_member(PoolSup, PoolName, InitMFA) ->
                 ok ->
                     {self(), Pid};
                 Error ->
+                    ?LOG_ERROR(
+                        #{
+                            label => "failed to initialize member",
+                            pool => PoolName,
+                            pid => Pid,
+                            error => Error
+                        },
+                        #{domain => [pooler]}
+                    ),
                     supervisor:terminate_child(PoolSup, Pid),
                     {self(), Error}
             end;
