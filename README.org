@@ -9,42 +9,34 @@ with exclusive access to pool members using =pooler:take_member=.
 
 ** What pooler does
 
-*** Protects the members of a pool from being used concurrently
+- *Exclusive member access* — each consumer gets sole ownership of a member for the duration of its work; pooler monitors consumers and reclaims members automatically on exit
+- *Fixed and dynamic sizing* — pools grow on demand up to =max_count= and cull idle members back to =init_count= on a configurable schedule
+- *Blocked-caller queuing* — =take_member/2= queues callers with a timeout instead of immediately returning =error_no_members= when the pool is busy
+- *Responsive under slow workers* — member starts and stops run in supervised helper processes, never blocking the pool gen-server
+- *Survives service outages* — returns =error_no_members= during outages without risking a supervisor restart cascade
+- *Group pools and load balancing* — pools can be grouped for random-selection load balancing across backends
+- *Fully supervised* — every process (members, starters, stoppers) lives under a supervision tree; shutting down a pool cleanly terminates all associated processes with no orphans
+- *Observability* — utilization stats, pool metrics, and structured logging
 
-The main pooler interface is =pooler:take_member/1= and
-=pooler:return_member/3=.  The pooler server will keep track of which
-members are *in use* and which are *free*.  There is no need to call
-=pooler:return_member= if the consumer is a short-lived process; in
-this case, pooler will detect the consumer's normal exit and reclaim
-the member.  To achieve this, pooler tracks the calling process of
-=take_member= as the consumer of the pool member.  Thus pooler assumes
-that there is no middle-man process calling =take_member= and handing
-out the member pid to another worker process.
+*** Exclusive member access
 
-*** Maintains the size of the pool
+Pooler monitors the *calling process* of =take_member= and uses that as the consumer identity, so =return_member= is optional for short-lived processes — pooler reclaims the member when the consumer exits.  This means the process that calls =take_member= must be the actual consumer; handing the member pid to a different process defeats the tracking mechanism.
 
-You specify an initial and a maximum number of members in the pool.
-Pooler will create new members on demand until the maximum member
-count is reached.  New pool members are added to replace members that
-crash.  If a consumer crashes, the member it was using will be
-destroyed and replaced.  You can configure Pooler to periodically
-check for and remove members that have not been used recently to
-reduce the member count back to its initial size.
+*** Pool sizing and member lifecycle
 
-*** Manage multiple pools
+Replacement is automatic: both a crashing member and an abnormally exiting consumer trigger destruction of the member and an async start of a replacement.  Culling runs on a configurable timer (=cull_interval=) to remove members idle longer than =max_age=, keeping resource usage proportional to actual demand.
 
-You can use pooler to manage multiple independent pools and multiple
-grouped pools. Independent pools allow you to pool clients for
-different backend services (e.g. postgresql and redis). Grouped pools
-can optionally be accessed using =pooler:take_group_member/1= to
-provide load balancing of the pools in the group. A typical use of
-grouped pools is to have each pool contain clients connected to a
-particular node in a cluster (think database read slaves).  Pooler's
-=take_group_member= function will randomly select a pool in the group
-to fetch a member from.  If the randomly selected pool has no free
-members, pooler will attempt to obtain a member from each pool in the
-group.  If there is no pool with available members, pooler will return
-=error_no_members=.
+*** Survives service outages
+
+When the backing service is unavailable, start attempts fail and =take_member= returns =error_no_members=, letting callers handle degradation gracefully.  The pool gen-server stays alive throughout and resumes filling the pool as soon as workers start succeeding again.  Repeated failures do not risk a supervisor restart cascade because workers use a =temporary= restart strategy.
+
+*** Keeps the pool gen-server responsive
+
+Member starts and stops are handled by short-lived supervised helper processes, so the pool gen-server never blocks on slow worker operations (e.g. TCP handshakes or protocol teardown).
+
+*** Group pools and load balancing
+
+Independent pools serve different backends within the same application.  Grouped pools sharing the same =group= tag form a cluster: =take_group_member= picks a pool at random and falls back to the remaining ones if the selected pool has no free members.  A typical use is one pool per node in a database read-replica set.
 
 ** Motivation
 
@@ -182,10 +174,11 @@ queuing entirely.
 
 By default, pooler only starts new members on demand — when a consumer calls
 =take_member= and the pool is exhausted.  Setting =auto_grow_threshold= to a
-non-negative integer causes pooler to start a new member proactively whenever
-the number of in-use members exceeds the threshold.  This can help keep latency
-low by warming up spare capacity before the pool is fully exhausted.  Disabled
-by default (=undefined=).
+non-negative integer causes pooler to start new members proactively after each
+successful =take_member= if the remaining free count has dropped to or below the
+threshold.  The new starts are capped at =max_count= total.  This can help keep
+latency low by warming up spare capacity before the pool is fully exhausted.
+Disabled by default (=undefined=).
 
 This option only has an effect on dynamic-sized pools (i.e. =max_count= >
 =init_count=); in a fixed-size pool there are no spare slots to grow into.
@@ -193,7 +186,7 @@ This option only has an effect on dynamic-sized pools (i.e. =max_count= >
 #+BEGIN_SRC erlang
 #{init_count => 5,
   max_count => 20,
-  auto_grow_threshold => 8}   %% start a new member when 9+ are in use
+  auto_grow_threshold => 2}   %% start new members when free_count drops to 2
 #+END_SRC
 
 **** Custom member initialization (initialize_mfa)
@@ -229,13 +222,13 @@ The option is also accepted by =pooler:pool_reconfigure/2=.
 **** Custom member termination (stop_mfa)
 
 By default, pooler removes a pool member by calling
-=supervisor:terminate_child/2=, which is a synchronous call to the member
-supervisor.  If your members perform slow teardown (e.g. sending a goodbye
-frame over a network connection), this can block the pool gen_server while the
-supervisor is busy.
+=supervisor:terminate_child/2= from a supervised helper process, so the pool
+gen-server is never blocked.  However, stopping members count against
+=max_count= until they actually die, so a slow =stop_mfa= reduces available
+capacity during teardown.
 
-The =stop_mfa= pool configuration parameter lets you override this.  It follows
-the same ={M, F, A}= convention with the ='$pooler_pid'= placeholder:
+The =stop_mfa= pool configuration parameter lets you override the default.
+It follows the same ={M, F, A}= convention with the ='$pooler_pid'= placeholder:
 
 #+BEGIN_SRC erlang
 #{name => pg_pool,
@@ -243,9 +236,28 @@ the same ={M, F, A}= convention with the ='$pooler_pid'= placeholder:
   stop_mfa => {my_conn, close, ['$pooler_pid']}}
 #+END_SRC
 
-The callback is called instead of =supervisor:terminate_child/2=.  If you want
-teardown to be fully asynchronous (fire-and-forget), make your callback send a
-message rather than blocking.
+The callback is called from the helper process instead of
+=supervisor:terminate_child/2=.  For maximum throughput under churn, prefer a
+fast or fire-and-forget teardown so that slots are freed quickly.
+
+**** Pools with slow-starting or slow-stopping workers
+
+For pools whose workers take significant time to start (e.g. opening a database
+or network connection), the recommended configuration pattern is:
+
+- Use =initialize_mfa= to perform the slow part of initialization (TCP handshake,
+  protocol negotiation, etc.) after =start_link= returns.  Each worker's
+  =start_link= completes quickly and multiple workers initialize in parallel.
+- Raise =member_start_timeout= to give workers enough time to finish.
+- Set =auto_grow_threshold= so the pool begins growing toward =max_count=
+  while free members still exist, giving slow workers time to initialize before
+  demand peaks.
+- Use =take_member/2= with a non-zero timeout so callers wait in the queue while
+  workers are starting rather than immediately receiving =error_no_members=.
+- Set =queue_max= to match the expected peak of concurrent callers.
+
+For pools with workers that are slow to stop, use =stop_mfa= with a fast
+asynchronous teardown so that the pool is not blocked while workers drain.
 
 *** Pool Configuration via =pooler:new_pool=
 You can create pools using =pooler:new_pool/1= when accepts a
@@ -280,13 +292,13 @@ Here's an example session:
 
 #+BEGIN_SRC erlang
 pooler:start().
-P = pooler:take_member(mysql),
+P = pooler:take_member(mysql, 5000),
 % use P
 pooler:return_member(mysql, P, ok).
 #+END_SRC
 
 Once started, the main interaction you will have with pooler is
-through two functions, =take_member/1= and =return_member/3= (or
+through two functions, =take_member= and =return_member/3= (or
 =return_member/2=).
 
 Call =pooler:take_member(Pool)= to obtain the pid belonging to a
@@ -298,6 +310,21 @@ member from the pool and start a new member to replace it.  If your
 process is short lived, you can omit the call to =return_member=.  In
 this case, pooler will detect the normal exit of the consumer and
 reclaim the member.
+
+=pooler:take_member/2= accepts a timeout (in milliseconds or as a
+=time_spec()= tuple).  When no member is immediately available, the
+caller is queued and waits until either a member is returned or the
+timeout expires.  Note that the timeout is /soft/: it controls how
+long the caller will wait in the queue, not the overall duration of the
+=gen_server:call= itself (which uses =infinity=).
+
+For dynamic-sized pools (=max_count > init_count=) be aware that
+=take_member/1= passes an implicit =0= timeout and therefore always
+returns =error_no_members= immediately when no member is free — even
+when the pool is actively starting new members to satisfy demand.
+=take_member/2= with a non-zero timeout queues the caller and delivers
+the next member that becomes available, including freshly started ones.
+Which variant fits best depends on your latency requirements.
 
 If you would like to obtain a member from a randomly selected pool in
 a group, call =pooler:take_group_member(Group)=. This will return a
