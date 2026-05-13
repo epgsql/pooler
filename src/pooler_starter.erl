@@ -1,6 +1,6 @@
 %% @author Seth Falcon <seth@userprimary.net>
 %% @copyright 2012-2013 Seth Falcon
-%% @doc Helper gen_server to start pool members
+%% @doc Helper gen_server to manage async member lifecycle (start and stop)
 %%
 -module(pooler_starter).
 -behaviour(gen_server).
@@ -9,6 +9,7 @@
 
 -define(POOLER_POOL_NAME, '$pooler_pool_name').
 -define(POOLER_PID, '$pooler_pid').
+-define(DEFAULT_STOP_MFA, {supervisor, terminate_child, [?POOLER_POOL_NAME, ?POOLER_PID]}).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
@@ -21,6 +22,8 @@
     start_member/4,
     stop_member_async/1,
     stop/1,
+    stop_spec/3,
+    default_stop_mfa/0,
     replace_placeholders/3
 ]).
 
@@ -38,19 +41,24 @@
     code_change/3
 ]).
 
--export_type([start_spec/0, start_result/0]).
+-export_type([start_spec/0, start_result/0, stop_spec/0, stop_mfa/0]).
 
 -type pool_member_sup() :: pid() | atom().
 -type parent() :: pid() | pool.
 -type initialize_mfa() :: undefined | {module(), atom(), [term()]}.
+-type stop_mfa() :: {module(), atom(), ['$pooler_pid' | '$pooler_pool_name' | term()]}.
 -type start_result() :: {StarterPid :: pid(), Result :: pid() | {error, _}}.
 -opaque start_spec() :: {pooler:pool_name(), pool_member_sup(), parent(), initialize_mfa()}.
+%% {PoolName, MemberPid, StopMFA}
+-opaque stop_spec() :: {pooler:pool_name(), pid(), stop_mfa()}.
 
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
 
--spec start_link(start_spec()) -> {ok, pid()}.
+-spec start_link(start_spec() | stop_spec()) -> {ok, pid()}.
+start_link({_, _, _} = Spec) ->
+    gen_server:start_link(?MODULE, Spec, []);
 start_link({_, _, _, _} = Spec) ->
     gen_server:start_link(?MODULE, Spec, []).
 
@@ -103,14 +111,26 @@ stop_member_async(Pid) ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 -record(starter, {
-    parent :: parent(),
+    %% start mode
+    parent :: parent() | undefined,
     pool_name :: pooler:pool_name(),
-    pool_member_sup :: pool_member_sup(),
+    pool_member_sup :: pool_member_sup() | undefined,
     initialize_mfa :: initialize_mfa(),
-    msg :: start_result() | undefined
+    msg :: start_result() | undefined,
+    %% stop mode
+    stopping_pid = undefined :: pid() | undefined,
+    stopping_mfa = undefined :: stop_mfa() | undefined
 }).
 
--spec init(start_spec()) -> {ok, #starter{}, {continue, start}}.
+-spec init(start_spec() | stop_spec()) -> {ok, #starter{}, {continue, start | stop}}.
+init({PoolName, MemberPid, StopMFA}) ->
+    {ok,
+        #starter{
+            pool_name = PoolName,
+            stopping_pid = MemberPid,
+            stopping_mfa = StopMFA
+        },
+        {continue, stop}};
 init({PoolName, PoolMemberSup, Parent, InitMFA}) ->
     {ok, #starter{pool_name = PoolName, pool_member_sup = PoolMemberSup, parent = Parent, initialize_mfa = InitMFA},
         {continue, start}}.
@@ -122,7 +142,13 @@ handle_continue(
     Msg = do_start_member(PoolSup, PoolName, InitMFA),
     % asynchronously in order to receive potential `stop*'
     accept_member_async(self()),
-    {noreply, State#starter{msg = Msg}}.
+    {noreply, State#starter{msg = Msg}};
+handle_continue(
+    stop,
+    #starter{pool_name = PoolName, stopping_pid = MemberPid, stopping_mfa = StopMFA} = State
+) ->
+    terminate_pid(PoolName, MemberPid, StopMFA),
+    {stop, normal, State}.
 
 handle_call(_Request, _From, State) ->
     {noreply, State}.
@@ -186,6 +212,23 @@ do_start_member(PoolSup, PoolName, InitMFA) ->
                 #{domain => [pooler]}
             ),
             {self(), Error}
+    end.
+
+-spec default_stop_mfa() -> stop_mfa().
+default_stop_mfa() ->
+    ?DEFAULT_STOP_MFA.
+
+-spec stop_spec(pooler:pool_name(), pid(), stop_mfa()) -> stop_spec().
+stop_spec(PoolName, MemberPid, StopMFA) ->
+    {PoolName, MemberPid, StopMFA}.
+
+-spec terminate_pid(pooler:pool_name(), pid(), stop_mfa()) -> ok.
+terminate_pid(PoolName, Pid, {Mod, Fun, Args}) when is_list(Args) ->
+    NewArgs = replace_placeholders(PoolName, Pid, Args),
+    try erlang:apply(Mod, Fun, NewArgs) of
+        _ -> ok
+    catch
+        _:_ -> terminate_pid(PoolName, Pid, ?DEFAULT_STOP_MFA)
     end.
 
 -spec replace_placeholders(pooler:pool_name(), pid(), [term()]) -> [term()].

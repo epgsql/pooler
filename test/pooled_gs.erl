@@ -23,6 +23,7 @@
     error_on_call/1,
     do_work/2,
     stop/1,
+    stop_blocking/2,
     initialize/1,
     initialize_fail/1,
     initialize_crash/1
@@ -80,6 +81,9 @@ error_on_call(S) ->
 stop(S) ->
     gen_server:call(S, stop).
 
+stop_blocking(Coordinator, Pid) ->
+    gen_server:call(Pid, {stop_blocking, Coordinator}, infinity).
+
 initialize(Pid) ->
     pong = gen_server:call(Pid, ping),
     ok.
@@ -96,7 +100,8 @@ initialize_crash(_Pid) ->
 -record(state, {
     type = "" :: string(),
     id :: reference(),
-    ping_count = 0 :: non_neg_integer()
+    ping_count = 0 :: non_neg_integer(),
+    blocked_from = undefined :: gen_server:from() | undefined
 }).
 
 init({Type}) ->
@@ -118,6 +123,9 @@ handle_call(ping_count, _From, #state{ping_count = C} = State) ->
     {reply, C, State};
 handle_call(error_on_call, _From, _State) ->
     erlang:error({pooled_gs, requested_error});
+handle_call({stop_blocking, Coordinator}, From, State) ->
+    Coordinator ! {stopping, self()},
+    {noreply, State#state{blocked_from = From}};
 handle_call(stop, _From, State) ->
     {stop, normal, stop_ok, State};
 handle_call(_Request, _From, State) ->
@@ -128,6 +136,9 @@ handle_cast(crash, _State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info(do_stop, #state{blocked_from = From} = State) ->
+    gen_server:reply(From, ok),
+    {stop, normal, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 

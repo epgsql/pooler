@@ -1596,6 +1596,134 @@ monitor_members_trigger_culling_and_return_reason() ->
     after 250 -> timeout
     end.
 
+pooler_async_stop_test_() ->
+    %% ?FUNCTION_NAME is used as the registered coordinator name so that each
+    %% test fun can do register(?FUNCTION_NAME, self()) and receive {stopping,_}
+    %% in the correct process regardless of EUnit's process model.
+    {foreach,
+        fun() ->
+            logger:set_handler_config(default, filters, []),
+            PoolConf = #{
+                name => test_pool_1,
+                max_count => 2,
+                init_count => 2,
+                start_mfa => {pooled_gs, start_link, [{type}]},
+                stop_mfa => {pooled_gs, stop_blocking, [?FUNCTION_NAME, '$pooler_pid']}
+            },
+            application:set_env(pooler, pools, [PoolConf]),
+            ok = application:start(pooler)
+        end,
+        fun(_) ->
+            catch unregister(?FUNCTION_NAME),
+            application:stop(pooler)
+        end,
+        [
+            {"stopping_count is tracked while stops are in flight", fun() ->
+                register(?FUNCTION_NAME, self()),
+                [P1, P2] = get_n_pids(test_pool_1, 2, []),
+                pooler:return_member(test_pool_1, P1, fail),
+                pooler:return_member(test_pool_1, P2, fail),
+                %% Both members are now stopping; replacements must not start yet
+                %% because stopping_count (2) fills the capacity (max_count = 2)
+                Util = maps:from_list(pooler:pool_utilization(test_pool_1)),
+                ?assertEqual(2, maps:get(stopping_count, Util)),
+                ?assertEqual(0, maps:get(starting_count, Util)),
+                %% Release both stops by signalling the members directly
+                receive
+                    {stopping, MP1} -> MP1 ! do_stop
+                after 5000 -> error(timeout_1)
+                end,
+                receive
+                    {stopping, MP2} -> MP2 ! do_stop
+                after 5000 -> error(timeout_2)
+                end,
+                wait_for_pool_state(test_pool_1, 2000, fun(U) ->
+                    maps:get(free_count, U) =:= 2 andalso
+                        maps:get(stopping_count, U) =:= 0
+                end)
+            end},
+            {"capacity never exceeded during stop+replace cycle", fun() ->
+                register(?FUNCTION_NAME, self()),
+                MemberSup = pooler_pool_sup:build_member_sup_name(test_pool_1),
+                [P1, P2] = get_n_pids(test_pool_1, 2, []),
+                pooler:return_member(test_pool_1, P1, fail),
+                pooler:return_member(test_pool_1, P2, fail),
+                %% While stopping, active children must not exceed max_count
+                Counts = supervisor:count_children(MemberSup),
+                Active = proplists:get_value(active, Counts, 0),
+                ?assert(Active =< 2),
+                receive
+                    {stopping, MP1} -> MP1 ! do_stop
+                after 5000 -> error(timeout_1)
+                end,
+                receive
+                    {stopping, MP2} -> MP2 ! do_stop
+                after 5000 -> error(timeout_2)
+                end,
+                wait_for_pool_state(test_pool_1, 2000, fun(U) ->
+                    maps:get(stopping_count, U) =:= 0
+                end),
+                Counts2 = supervisor:count_children(MemberSup),
+                Active2 = proplists:get_value(active, Counts2, 0),
+                ?assert(Active2 =< 2)
+            end},
+            {"culling does not trigger replacement", fun() ->
+                register(?FUNCTION_NAME, self()),
+                %% init_count=0 so all free members are above init_count and eligible for culling
+                {ok, _} = pooler:new_pool(#{
+                    name => test_pool_cull,
+                    max_count => 2,
+                    init_count => 0,
+                    cull_interval => {100, ms},
+                    max_age => {0, sec},
+                    start_mfa => {pooled_gs, start_link, [{type}]},
+                    stop_mfa => {pooled_gs, stop_blocking, [?FUNCTION_NAME, '$pooler_pid']}
+                }),
+                %% Take and return 2 members so free_count=2 > init_count=0 → MaxCull=2
+                [P1, P2] = get_n_pids(test_pool_cull, 2, []),
+                pooler:return_member(test_pool_cull, P1),
+                pooler:return_member(test_pool_cull, P2),
+                timer:sleep(200),
+                receive
+                    {stopping, MP1} -> MP1 ! do_stop
+                after 5000 -> error(timeout_1)
+                end,
+                receive
+                    {stopping, MP2} -> MP2 ! do_stop
+                after 5000 -> error(timeout_2)
+                end,
+                wait_for_pool_state(test_pool_cull, 2000, fun(U) ->
+                    maps:get(stopping_count, U) =:= 0
+                end),
+                ?assertEqual(0, maps:get(free_count, maps:from_list(pooler:pool_utilization(test_pool_cull)))),
+                pooler:rm_pool(test_pool_cull)
+            end},
+            {"pool_utilization exposes stopping_count", fun() ->
+                Util = maps:from_list(pooler:pool_utilization(test_pool_1)),
+                ?assert(maps:is_key(stopping_count, Util)),
+                ?assertEqual(0, maps:get(stopping_count, Util))
+            end}
+        ]}.
+
+wait_for_pool_state(Pool, Timeout, Fun) ->
+    wait_for_pool_state(Pool, Timeout, Fun, erlang:monotonic_time(millisecond)).
+
+wait_for_pool_state(Pool, Timeout, Fun, Start) ->
+    Util = maps:from_list(pooler:pool_utilization(Pool)),
+    case Fun(Util) of
+        true ->
+            ok;
+        false ->
+            Now = erlang:monotonic_time(millisecond),
+            case Now - Start >= Timeout of
+                true ->
+                    error(timeout);
+                false ->
+                    timer:sleep(20),
+                    wait_for_pool_state(Pool, Timeout, Fun, Start)
+            end
+    end.
+
 time_as_millis_test_() ->
     Zeros = [{{0, U}, 0} || U <- [min, sec, ms, mu]],
     Ones = [

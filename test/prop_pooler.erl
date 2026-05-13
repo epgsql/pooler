@@ -31,8 +31,8 @@ prop_fixed_start() ->
                 max_count => Size
             },
             fun() ->
-                %% Pool is not utilized
                 pool_is_free(?FUNCTION_NAME, Size),
+                assert_worker_count_bounded(?FUNCTION_NAME, Size),
                 true
             end
         )
@@ -61,10 +61,9 @@ prop_fixed_checkout_all() ->
                         take_n(?FUNCTION_NAME, 0, Size)
                     )
                 ),
-                %% Fixed pool - can't take more members than pool size
                 ?assertEqual(error_no_members, pooler:take_member(?FUNCTION_NAME, 10)),
-                %% Pool is fully utilized
                 pool_is_utilized(?FUNCTION_NAME, self(), Size),
+                assert_worker_count_bounded(?FUNCTION_NAME, Size),
                 true
             end
         )
@@ -106,8 +105,8 @@ prop_dynamic_checkout() ->
                 ),
                 %% Pool is fully utilized now
                 ?assertEqual(error_no_members, pooler:take_member(?FUNCTION_NAME, 10)),
-                %% Dynamic pool is fully utilized up to max_count
                 pool_is_utilized(?FUNCTION_NAME, self(), MaxCount),
+                assert_worker_count_bounded(?FUNCTION_NAME, MaxCount),
                 true
             end
         )
@@ -144,6 +143,7 @@ prop_fixed_take_return() ->
                 StatsAfter = Stats(),
                 ?assertEqual(UtilizationBefore, UtilizationAfter),
                 ?assertEqual(StatsBefore, StatsAfter),
+                assert_worker_count_bounded(?FUNCTION_NAME, Size),
                 true
             end
         )
@@ -193,6 +193,7 @@ prop_fixed_take_return_broken() ->
                 ?assertEqual(StatusBefore, StatusAfter),
                 %% however, all workers are new processes, none reused
                 ?assertEqual([], ordsets:intersection(ordsets:from_list(PidsBefore), ordsets:from_list(PidsAfter))),
+                assert_worker_count_bounded(?FUNCTION_NAME, Size),
                 true
             end
         )
@@ -263,6 +264,7 @@ prop_fixed_client_died() ->
                 StatsAfter = Stats(),
                 ?assertEqual(UtilizationBefore, UtilizationAfter),
                 ?assertEqual(StatsBefore, StatsAfter),
+                assert_worker_count_bounded(?FUNCTION_NAME, Size),
                 true
             end
         )
@@ -306,9 +308,12 @@ prop_group_take_return() ->
                     ),
                     %% Now return all the workers
                     [ok = pooler:return_group_member(?FUNCTION_NAME, Pid) || Pid <- Taken],
-                    %% All pools are free
                     lists:foreach(
                         fun(Pool) -> pool_is_free(Pool, NumWorkers) end,
+                        GroupPoolPids
+                    ),
+                    lists:foreach(
+                        fun(Pool) -> assert_worker_count_bounded(Pool, NumWorkers) end,
                         GroupPoolPids
                     ),
                     true
@@ -412,6 +417,20 @@ pool_is_free(Pool, NumWorkers) ->
         )
     ),
     true.
+
+assert_worker_count_bounded(PoolNameOrPid, MaxCount) ->
+    PoolName =
+        case is_atom(PoolNameOrPid) of
+            true ->
+                PoolNameOrPid;
+            false ->
+                {registered_name, N} = erlang:process_info(PoolNameOrPid, registered_name),
+                N
+        end,
+    MemberSup = pooler_pool_sup:build_member_sup_name(PoolName),
+    Counts = supervisor:count_children(MemberSup),
+    Active = proplists:get_value(active, Counts, 0),
+    ?assert(Active =< MaxCount).
 
 pg_start() ->
     pg:start(pg).

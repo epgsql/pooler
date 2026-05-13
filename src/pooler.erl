@@ -60,7 +60,7 @@
     code_change/3
 ]).
 
--vsn(2).
+-vsn(3).
 %% Bump this value and add a new clause to `code_change', if the format of `#pool{}' record changed
 
 %% ------------------------------------------------------------------
@@ -75,7 +75,6 @@
 -define(DEFAULT_AUTO_GROW_THRESHOLD, undefined).
 -define(POOLER_GROUP_TABLE, pooler_group_table).
 -define(DEFAULT_POOLER_QUEUE_MAX, 50).
--define(DEFAULT_STOP_MFA, {supervisor, terminate_child, ['$pooler_pool_name', '$pooler_pid']}).
 
 -record(pool, {
     name :: atom(),
@@ -130,6 +129,7 @@
     %% timestamp records when the start request was initiated
     %% and is used to implement start timeout.
     starting_members = [] :: [{pid(), erlang:timestamp()}],
+    stopping_count = 0 :: non_neg_integer(),
 
     %% The maximum amount of time to allow for member start.
     member_start_timeout = ?DEFAULT_MEMBER_START_TIMEOUT :: time_spec(),
@@ -142,7 +142,7 @@
 
     %% Stop callback to gracefully attempt to terminate pool members.
     %% The list of arguments must contain the fixed atom '$pooler_pid'.
-    stop_mfa = ?DEFAULT_STOP_MFA :: {atom(), atom(), [term()]},
+    stop_mfa = pooler_starter:default_stop_mfa() :: pooler_starter:stop_mfa(),
 
     %% Optional callback invoked by pooler_starter after supervisor:start_child
     %% returns but before the member is accepted into the pool. Use this to
@@ -189,7 +189,7 @@
         queue_max => non_neg_integer(),
         metrics_api => folsom | exometer,
         metrics_mod => module(),
-        stop_mfa => {module(), atom(), ['$pooler_pid' | any(), ...]},
+        stop_mfa => pooler_starter:stop_mfa(),
         initialize_mfa => {module(), atom(), ['$pooler_pid' | '$pooler_pool_name' | any(), ...]},
         auto_grow_threshold => non_neg_integer(),
         add_member_retry => non_neg_integer()
@@ -217,12 +217,13 @@
         | {queue_max, non_neg_integer()}
         | {metrics_api, folsom | exometer}
         | {metrics_mod, module()}
-        | {stop_mfa, {module(), atom(), ['$pooler_pid' | any(), ...]}}
+        | {stop_mfa, pooler_starter:stop_mfa()}
         | {initialize_mfa, undefined | {module(), atom(), ['$pooler_pid' | '$pooler_pool_name' | any(), ...]}}
         | {auto_grow_threshold, non_neg_integer()}}.
 
+-type member_status() :: free | pid() | {stopping, replace | no_replace}.
 -type free_member_info() :: {reference(), free, erlang:timestamp()}.
--type member_info() :: {reference(), free | pid(), erlang:timestamp()}.
+-type member_info() :: {reference(), member_status(), erlang:timestamp()}.
 %% See {@link pool_stats/1}
 
 -type members_map() :: #{pid() => member_info()}.
@@ -574,7 +575,7 @@ init(#{name := Name, max_count := MaxCount, init_count := InitCount, start_mfa :
         max_age = maps:get(max_age, P, ?DEFAULT_MAX_AGE),
         member_start_timeout = maps:get(member_start_timeout, P, ?DEFAULT_MEMBER_START_TIMEOUT),
         auto_grow_threshold = maps:get(auto_grow_threshold, P, ?DEFAULT_AUTO_GROW_THRESHOLD),
-        stop_mfa = maps:get(stop_mfa, P, ?DEFAULT_STOP_MFA),
+        stop_mfa = maps:get(stop_mfa, P, pooler_starter:default_stop_mfa()),
         initialize_mfa = maps:get(initialize_mfa, P, undefined),
         metrics_mod = maps:get(metrics_mod, P, pooler_no_metrics),
         metrics_api = maps:get(metrics_api, P, folsom),
@@ -646,8 +647,21 @@ handle_info({requestor_timeout, From}, Pool = #pool{queued_requestors = Requesto
 handle_info({'DOWN', MRef, process, Pid, Reason}, State) ->
     State1 =
         case maps:get(Pid, State#pool.all_members, undefined) of
-            {_PoolName, _ConsumerPid, _Time} ->
-                do_return_member(Pid, fail, State);
+            {MRef, {stopping, Flag}, _Time} ->
+                %% Expected death: member was being stopped asynchronously.
+                Pool1 = State#pool{
+                    all_members = maps:remove(Pid, State#pool.all_members),
+                    stopping_count = State#pool.stopping_count - 1
+                },
+                send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, histogram),
+                case Flag of
+                    replace -> add_members_async(1, Pool1);
+                    no_replace -> Pool1
+                end;
+            {MRef, _Status, _Time} ->
+                %% Unexpected death while free or in_use. Process is already
+                %% dead — clean up directly without the async stop path.
+                handle_unexpected_member_down(Pid, State);
             undefined ->
                 case maps:get(Pid, State#pool.consumer_to_pid, undefined) of
                     {MRef, Pids} ->
@@ -676,17 +690,35 @@ terminate(_Reason, _State) ->
     ok.
 
 -spec code_change(_, _, _) -> {'ok', _}.
-code_change(
-    _OldVsn,
+%% pre-v2 tuple (24 elements) → v2 shape → v3
+code_change(_OldVsn, OldState, _Extra) when tuple_size(OldState) =:= 24 ->
+    {ok, do_upgrade_to_v3(do_upgrade_pre_v2_to_v2(OldState))};
+%% v2 #pool{} tuple (26 elements) → v3
+code_change(2, OldState, _Extra) when tuple_size(OldState) =:= 26 ->
+    {ok, do_upgrade_to_v3(OldState)};
+code_change(_, State, _Extra) ->
+    {ok, State}.
+
+%% Converts the pre-v2 (pre-1.6.0) 24-element pool tuple into the
+%% 26-element v2 shape, converting dict-based maps to Erlang maps.
+do_upgrade_pre_v2_to_v2(
     {pool, Name, Group, MaxCount, InitCount, StartMFA, FreePids, InUseCount, FreeCount, AddMemberRetry, CullInterval,
         MaxAge, MemberSup, StarterSup, AllMembers, ConsumerToPid, StartingMembers, MemberStartTimeout,
-        AutoGrowThreshold, StopMFA, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax},
-    _Extra
+        AutoGrowThreshold, StopMFA, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}
 ) ->
-    {ok, #pool{
-        cull_timer = undefined,
-        all_members = maps:from_list(dict:to_list(AllMembers)),
-        consumer_to_pid = maps:from_list(dict:to_list(ConsumerToPid)),
+    {pool, Name, Group, MaxCount, InitCount, StartMFA, FreePids, InUseCount, FreeCount, AddMemberRetry, CullInterval,
+        MaxAge, undefined, MemberSup, StarterSup, maps:from_list(dict:to_list(AllMembers)),
+        maps:from_list(dict:to_list(ConsumerToPid)), StartingMembers, MemberStartTimeout, AutoGrowThreshold, StopMFA,
+        undefined, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}.
+
+%% Converts a v2 26-element pool tuple to a vsn(3) #pool{} record,
+%% adding stopping_count = 0.
+do_upgrade_to_v3(
+    {pool, Name, Group, MaxCount, InitCount, StartMFA, FreePids, InUseCount, FreeCount, AddMemberRetry, CullInterval,
+        MaxAge, CullTimer, MemberSup, StarterSup, AllMembers, ConsumerToPid, StartingMembers, MemberStartTimeout,
+        AutoGrowThreshold, StopMFA, InitializeMFA, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}
+) ->
+    #pool{
         name = Name,
         group = Group,
         max_count = MaxCount,
@@ -698,19 +730,22 @@ code_change(
         add_member_retry = AddMemberRetry,
         cull_interval = CullInterval,
         max_age = MaxAge,
+        cull_timer = CullTimer,
         member_sup = MemberSup,
         starter_sup = StarterSup,
+        all_members = AllMembers,
+        consumer_to_pid = ConsumerToPid,
         starting_members = StartingMembers,
+        stopping_count = 0,
         member_start_timeout = MemberStartTimeout,
         auto_grow_threshold = AutoGrowThreshold,
         stop_mfa = StopMFA,
+        initialize_mfa = InitializeMFA,
         metrics_mod = MetricsMod,
         metrics_api = MetricsAPI,
         queued_requestors = QueuedRequestors,
         queue_max = QueueMax
-    }};
-code_change(_, State, _Extra) ->
-    {ok, State}.
+    }.
 
 %% ------------------------------------------------------------------
 %% Internal Function Definitions
@@ -918,6 +953,7 @@ take_member_from_pool(
         free_pids = Free,
         in_use_count = NumInUse,
         free_count = NumFree,
+        stopping_count = StoppingCount,
         starting_members = StartingMembers,
         member_start_timeout = StartTimeout
     } = Pool,
@@ -926,7 +962,7 @@ take_member_from_pool(
     send_metric(Pool, take_rate, 1, meter),
     Pool1 = remove_stale_starting_members(Pool, StartingMembers, StartTimeout),
     NonStaleStartingMemberCount = length(Pool1#pool.starting_members),
-    NumCanAdd = Max - (NumInUse + NumFree + NonStaleStartingMemberCount),
+    NumCanAdd = Max - (NumInUse + NumFree + NonStaleStartingMemberCount + StoppingCount),
     case Free of
         [] when NumCanAdd =< 0 ->
             send_metric(Pool, error_no_members_count, {inc, 1}, counter),
@@ -1029,6 +1065,9 @@ do_return_member(
                 #{domain => [pooler]}
             ),
             Pool;
+        {_, {stopping, _}, _} ->
+            %% member is being stopped asynchronously — ignore this return
+            Pool;
         {MRef, CPid, _} ->
             #pool{
                 free_pids = Free,
@@ -1055,13 +1094,16 @@ do_return_member(
             Pool
     end;
 do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
-    % for the fail case, perhaps the member crashed and was alerady
+    % for the fail case, perhaps the member crashed and was already
     % removed, so use find instead of fetch and ignore missing.
     clean_group_table(Pid, Pool),
     case maps:get(Pid, AllMembers, undefined) of
+        {_MRef, {stopping, _}, _} ->
+            %% already being stopped asynchronously — ignore
+            Pool;
         {_MRef, _, _} ->
-            Pool1 = remove_pid(Pid, Pool),
-            add_members_async(1, Pool1);
+            %% replacement is triggered when the member's DOWN arrives
+            remove_pid(Pid, Pool, replace);
         undefined ->
             Pool
     end.
@@ -1097,13 +1139,43 @@ cpmap_remove(Pid, CPid, CPMap) ->
             CPMap
     end.
 
-% @doc Remove and kill a pool member.
+% @doc Handle a member process that died unexpectedly (not via async stop).
 %
-% Handles in-use and free members.  Logs an error if the pid is not
-% tracked in state.all_members.
+% The process is already dead so we clean up pool state directly and
+% start a replacement, bypassing the async stop machinery.
+handle_unexpected_member_down(Pid, Pool) ->
+    clean_group_table(Pid, Pool),
+    AllMembers = Pool#pool.all_members,
+    case maps:get(Pid, AllMembers, undefined) of
+        {_, free, _} ->
+            Pool1 = Pool#pool{
+                free_pids = lists:delete(Pid, Pool#pool.free_pids),
+                free_count = Pool#pool.free_count - 1,
+                all_members = maps:remove(Pid, AllMembers)
+            },
+            send_metric(Pool1, killed_free_count, {inc, 1}, counter),
+            add_members_async(1, Pool1);
+        {_, CPid, _} ->
+            Pool1 = Pool#pool{
+                in_use_count = Pool#pool.in_use_count - 1,
+                all_members = maps:remove(Pid, AllMembers),
+                consumer_to_pid = cpmap_remove(Pid, CPid, Pool#pool.consumer_to_pid)
+            },
+            send_metric(Pool1, killed_in_use_count, {inc, 1}, counter),
+            add_members_async(1, Pool1);
+        undefined ->
+            Pool
+    end.
+
+% @doc Initiate async removal of a pool member.
 %
--spec remove_pid(pid(), #pool{}) -> #pool{}.
-remove_pid(Pid, Pool) ->
+% Tags the member as stopping (keeping it in all_members so it counts
+% against max_count), spawns a supervised stopper, and returns
+% immediately.  The pool learns the member has actually died via its
+% monitor DOWN message.
+%
+-spec remove_pid(pid(), #pool{}, replace | no_replace) -> #pool{}.
+remove_pid(Pid, Pool, Flag) ->
     #pool{
         name = PoolName,
         all_members = AllMembers,
@@ -1111,26 +1183,28 @@ remove_pid(Pid, Pool) ->
         stop_mfa = StopMFA
     } = Pool,
     case maps:get(Pid, AllMembers, undefined) of
-        {MRef, free, _Time} ->
-            % remove an unused member
-            erlang:demonitor(MRef, [flush]),
-            FreePids = lists:delete(Pid, Pool#pool.free_pids),
-            NumFree = Pool#pool.free_count - 1,
-            Pool1 = Pool#pool{free_pids = FreePids, free_count = NumFree},
-            terminate_pid(PoolName, Pid, StopMFA),
+        {MRef, free, Time} ->
+            Pool1 = Pool#pool{
+                free_pids = lists:delete(Pid, Pool#pool.free_pids),
+                free_count = Pool#pool.free_count - 1,
+                stopping_count = Pool#pool.stopping_count + 1,
+                all_members = AllMembers#{Pid => {MRef, {stopping, Flag}, Time}}
+            },
+            pooler_starter_sup:new_stopper(pooler_starter:stop_spec(PoolName, Pid, StopMFA)),
             send_metric(Pool1, killed_free_count, {inc, 1}, counter),
-            Pool1#pool{all_members = maps:remove(Pid, AllMembers)};
-        {MRef, CPid, _Time} ->
-            %% remove a member being consumed. No notice is sent to
-            %% the consumer.
-            erlang:demonitor(MRef, [flush]),
-            Pool1 = Pool#pool{in_use_count = Pool#pool.in_use_count - 1},
-            terminate_pid(PoolName, Pid, StopMFA),
+            send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, histogram),
+            Pool1;
+        {MRef, CPid, Time} ->
+            Pool1 = Pool#pool{
+                in_use_count = Pool#pool.in_use_count - 1,
+                stopping_count = Pool#pool.stopping_count + 1,
+                all_members = AllMembers#{Pid => {MRef, {stopping, Flag}, Time}},
+                consumer_to_pid = cpmap_remove(Pid, CPid, CPMap)
+            },
+            pooler_starter_sup:new_stopper(pooler_starter:stop_spec(PoolName, Pid, StopMFA)),
             send_metric(Pool1, killed_in_use_count, {inc, 1}, counter),
-            Pool1#pool{
-                consumer_to_pid = cpmap_remove(Pid, CPid, CPMap),
-                all_members = maps:remove(Pid, AllMembers)
-            };
+            send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, histogram),
+            Pool1;
         undefined ->
             ?LOG_ERROR(
                 #{
@@ -1207,7 +1281,7 @@ cull_members_from_pool(
                     expired_free_members(MemberInfo, os:timestamp(), MaxAge),
                 CullList = lists:sublist(ExpiredMembers, MaxCull),
                 lists:foldl(
-                    fun({CullMe, _}, S) -> remove_pid(CullMe, S) end,
+                    fun({CullMe, _}, S) -> remove_pid(CullMe, S, no_replace) end,
                     Pool,
                     CullList
                 );
@@ -1259,7 +1333,7 @@ calculate_reconfigure_actions(
         max_age => ?DEFAULT_MAX_AGE,
         member_start_timeout => ?DEFAULT_MEMBER_START_TIMEOUT,
         auto_grow_threshold => ?DEFAULT_AUTO_GROW_THRESHOLD,
-        stop_mfa => ?DEFAULT_STOP_MFA,
+        stop_mfa => pooler_starter:default_stop_mfa(),
         initialize_mfa => undefined,
         metrics_mod => pooler_no_metrics,
         metrics_api => folsom,
@@ -1395,7 +1469,7 @@ apply_reconfigure_action({set_parameter, {Name, Value}}, Pool) ->
 apply_reconfigure_action({start_workers, Count}, Pool) ->
     add_members_async(Count, Pool);
 apply_reconfigure_action({stop_free_workers, Count}, #pool{free_pids = Free} = Pool) ->
-    lists:foldl(fun remove_pid/2, Pool, lists:sublist(Free, Count));
+    lists:foldl(fun(P, S) -> remove_pid(P, S, no_replace) end, Pool, lists:sublist(Free, Count));
 apply_reconfigure_action({shrink_queue, Count}, #pool{queued_requestors = Q} = Pool) ->
     {ToShrink, ToKeep} = lists:split(Count, queue:to_list(Q)),
     [gen_server:reply(From, error_no_members) || {From, _TRef} <- ToShrink],
@@ -1559,22 +1633,13 @@ maybe_reply({Member, NewPool}) ->
 %% Implementation of a best-effort termination for a pool member:
 %% Terminates the pid's pool member given a MFA that gets applied. The list
 %% of arguments must contain the fixed atom ?POOLER_PID, which is replaced
-%% by the target pid. Failure to provide a valid MFA will lead to use the
-%% default callback.
--spec terminate_pid(atom(), pid(), {atom(), atom(), [term()]}) -> ok.
-terminate_pid(PoolName, Pid, {Mod, Fun, Args}) when is_list(Args) ->
-    NewArgs = pooler_starter:replace_placeholders(PoolName, Pid, Args),
-    try erlang:apply(Mod, Fun, NewArgs) of
-        _ -> ok
-    catch
-        _:_ -> terminate_pid(PoolName, Pid, ?DEFAULT_STOP_MFA)
-    end.
 
 compute_utilization(#pool{
     max_count = MaxCount,
     in_use_count = InUseCount,
     free_count = FreeCount,
     starting_members = Starting,
+    stopping_count = StoppingCount,
     queued_requestors = Queue,
     queue_max = QueueMax
 }) ->
@@ -1583,6 +1648,7 @@ compute_utilization(#pool{
         {in_use_count, InUseCount},
         {free_count, FreeCount},
         {starting_count, length(Starting)},
+        {stopping_count, StoppingCount},
         %% Note not O(n), so in pathological cases this might be expensive
         {queued_count, queue:len(Queue)},
         {queue_max, QueueMax}
