@@ -206,7 +206,7 @@ pooler_basics_integration_to_other_supervisor_test_() ->
 basic_tests() ->
     [
         {"there are init_count members at start", fun() ->
-            Stats = [P || {P, {_, free, _}} <- pooler:pool_stats(test_pool_1)],
+            Stats = [P || {P, {_, free, _, _}} <- pooler:pool_stats(test_pool_1)],
             ?assertEqual(2, length(Stats))
         end},
 
@@ -264,7 +264,7 @@ basic_tests() ->
         end},
 
         {"if a free pid crashes it is replaced", fun() ->
-            FreePids = [P || {P, {_, free, _}} <- pooler:pool_stats(test_pool_1)],
+            FreePids = [P || {P, {_, free, _, _}} <- pooler:pool_stats(test_pool_1)],
             [exit(P, kill) || P <- FreePids],
             Pids1 = get_n_pids(3, []),
             ?assertEqual(3, length(Pids1))
@@ -1702,6 +1702,232 @@ pooler_async_stop_test_() ->
                 Util = maps:from_list(pooler:pool_utilization(test_pool_1)),
                 ?assert(maps:is_key(stopping_count, Util)),
                 ?assertEqual(0, maps:get(stopping_count, Util))
+            end}
+        ]}.
+
+pooler_ttl_test_() ->
+    StartMfa = {pooled_gs, start_link, [{type}]},
+    BaseConf = #{
+        name => ttl_pool,
+        max_count => 2,
+        init_count => 1,
+        start_mfa => StartMfa,
+        max_lifetime => {200, ms}
+    },
+    {foreach,
+        fun() ->
+            logger:set_handler_config(default, filters, []),
+            application:set_env(pooler, pools, []),
+            ok = application:start(pooler)
+        end,
+        fun(_) ->
+            application:stop(pooler)
+        end,
+        [
+            {"expired free member is replaced before being handed to a client", fun() ->
+                {ok, _} = pooler:new_pool(BaseConf),
+                P1 = pooler:take_member(ttl_pool),
+                ID1 = pooled_gs:get_id(P1),
+                ok = pooler:return_member(ttl_pool, P1),
+                timer:sleep(300),
+                %% P1's TTL (200ms) has elapsed; ensure replacement is ready
+                %% then verify the next take returns a different member instance
+                wait_for_pool_state(ttl_pool, 3000, fun(U) ->
+                    maps:get(free_count, U) =:= 1 andalso maps:get(stopping_count, U) =:= 0
+                end),
+                P2 = pooler:take_member(ttl_pool),
+                ?assertNotEqual(ID1, pooled_gs:get_id(P2)),
+                ok = pooler:return_member(ttl_pool, P2)
+            end},
+
+            {"expired in-use member is replaced at return, not re-pooled", fun() ->
+                {ok, _} = pooler:new_pool(BaseConf),
+                P1 = pooler:take_member(ttl_pool),
+                ID1 = pooled_gs:get_id(P1),
+                timer:sleep(300),
+                ok = pooler:return_member(ttl_pool, P1),
+                wait_for_pool_state(ttl_pool, 3000, fun(U) ->
+                    maps:get(free_count, U) =:= 1 andalso maps:get(stopping_count, U) =:= 0
+                end),
+                P2 = pooler:take_member(ttl_pool),
+                ?assertNotEqual(ID1, pooled_gs:get_id(P2)),
+                ok = pooler:return_member(ttl_pool, P2)
+            end},
+
+            {"timer evicts free member and pool replenishes without client activity", fun() ->
+                {ok, _} = pooler:new_pool(BaseConf),
+                wait_for_pool_state(ttl_pool, 1000, fun(U) -> maps:get(free_count, U) =:= 1 end),
+                [P1] = [P || {P, {_, free, _, _}} <- pooler:pool_stats(ttl_pool)],
+                ID1 = pooled_gs:get_id(P1),
+                timer:sleep(300),
+                wait_for_pool_state(ttl_pool, 3000, fun(U) ->
+                    maps:get(free_count, U) =:= 1 andalso maps:get(stopping_count, U) =:= 0
+                end),
+                %% take the replacement (prevents timer re-eviction during assertions)
+                P2 = pooler:take_member(ttl_pool),
+                ?assertNotEqual(ID1, pooled_gs:get_id(P2)),
+                ok = pooler:return_member(ttl_pool, P2)
+            end},
+
+            {"fixed-size pool replenishes to init_count after TTL eviction", fun() ->
+                {ok, _} = pooler:new_pool(BaseConf#{init_count => 2, max_count => 2}),
+                wait_for_pool_state(ttl_pool, 1000, fun(U) -> maps:get(free_count, U) =:= 2 end),
+                InitPs = [P || {P, {_, free, _, _}} <- pooler:pool_stats(ttl_pool)],
+                InitIDs = lists:sort([pooled_gs:get_id(P) || P <- InitPs]),
+                timer:sleep(300),
+                wait_for_pool_state(ttl_pool, 3000, fun(U) ->
+                    maps:get(free_count, U) =:= 2 andalso maps:get(stopping_count, U) =:= 0
+                end),
+                NewPs = pooler:take_member(ttl_pool),
+                %% take to freeze timer
+                _ = NewPs,
+                NewPs2 = pooler:take_member(ttl_pool),
+                NewIDs = lists:sort([pooled_gs:get_id(NewPs), pooled_gs:get_id(NewPs2)]),
+                ?assertNotEqual(InitIDs, NewIDs),
+                ok = pooler:return_member(ttl_pool, NewPs),
+                ok = pooler:return_member(ttl_pool, NewPs2)
+            end},
+
+            {"in-use member past TTL is not force-evicted; replaced when returned", fun() ->
+                {ok, _} = pooler:new_pool(BaseConf),
+                P1 = pooler:take_member(ttl_pool),
+                ID1 = pooled_gs:get_id(P1),
+                timer:sleep(300),
+                %% in-use member must still be alive (never force-evicted)
+                ?assert(is_process_alive(P1)),
+                ok = pooler:return_member(ttl_pool, P1),
+                wait_for_pool_state(ttl_pool, 3000, fun(U) ->
+                    maps:get(free_count, U) =:= 1 andalso maps:get(stopping_count, U) =:= 0
+                end),
+                P2 = pooler:take_member(ttl_pool),
+                ?assertNotEqual(ID1, pooled_gs:get_id(P2)),
+                ok = pooler:return_member(ttl_pool, P2)
+            end},
+
+            {"reconfigure: adding max_lifetime to existing pool causes members to expire", fun() ->
+                {ok, _} = pooler:new_pool(maps:remove(max_lifetime, BaseConf)),
+                wait_for_pool_state(ttl_pool, 1000, fun(U) -> maps:get(free_count, U) =:= 1 end),
+                [P1] = [P || {P, {_, free, _, _}} <- pooler:pool_stats(ttl_pool)],
+                ID1 = pooled_gs:get_id(P1),
+                {ok, _} = pooler:pool_reconfigure(ttl_pool, #{
+                    name => ttl_pool,
+                    init_count => 1,
+                    max_count => 2,
+                    start_mfa => StartMfa,
+                    max_lifetime => {200, ms}
+                }),
+                timer:sleep(300),
+                wait_for_pool_state(ttl_pool, 3000, fun(U) ->
+                    maps:get(free_count, U) =:= 1 andalso maps:get(stopping_count, U) =:= 0
+                end),
+                P2 = pooler:take_member(ttl_pool),
+                ?assertNotEqual(ID1, pooled_gs:get_id(P2)),
+                ok = pooler:return_member(ttl_pool, P2)
+            end},
+
+            {"reconfigure: removing max_lifetime stops further evictions", fun() ->
+                {ok, _} = pooler:new_pool(BaseConf),
+                wait_for_pool_state(ttl_pool, 1000, fun(U) -> maps:get(free_count, U) =:= 1 end),
+                [P1] = [P || {P, {_, free, _, _}} <- pooler:pool_stats(ttl_pool)],
+                ID1 = pooled_gs:get_id(P1),
+                %% remove TTL while P1 is still alive (before its 200ms window)
+                {ok, _} = pooler:pool_reconfigure(ttl_pool, #{
+                    name => ttl_pool,
+                    init_count => 1,
+                    max_count => 2,
+                    start_mfa => StartMfa
+                }),
+                %% sleep past where P1 would have expired under old TTL
+                timer:sleep(300),
+                [P2] = [P || {P, {_, free, _, _}} <- pooler:pool_stats(ttl_pool)],
+                ?assertEqual(ID1, pooled_gs:get_id(P2))
+            end},
+
+            {"new_pool fails when jitter >= max_lifetime", fun() ->
+                ?assertMatch(
+                    {error, _},
+                    pooler:new_pool(BaseConf#{max_lifetime_jitter => {200, ms}})
+                ),
+                ?assertMatch(
+                    {error, _},
+                    pooler:new_pool(BaseConf#{max_lifetime_jitter => {500, ms}})
+                )
+            end},
+
+            {"pool_reconfigure fails when jitter >= max_lifetime", fun() ->
+                {ok, _} = pooler:new_pool(BaseConf),
+                ?assertMatch(
+                    {error, jitter_must_be_less_than_max_lifetime},
+                    pooler:pool_reconfigure(ttl_pool, BaseConf#{max_lifetime_jitter => {200, ms}})
+                )
+            end},
+
+            {"reconfigure: shortening max_lifetime causes members to expire sooner", fun() ->
+                %% Start with a long lifetime so members won't expire during setup
+                {ok, _} = pooler:new_pool(BaseConf#{max_lifetime => {10, sec}}),
+                wait_for_pool_state(ttl_pool, 1000, fun(U) -> maps:get(free_count, U) =:= 1 end),
+                [P1] = [P || {P, {_, free, _, _}} <- pooler:pool_stats(ttl_pool)],
+                ID1 = pooled_gs:get_id(P1),
+                %% Reconfigure to a short lifetime — exercises recompute_member_expiries/3
+                %% third clause (set → different set), shifting existing expiry by delta
+                {ok, _} = pooler:pool_reconfigure(ttl_pool, BaseConf#{max_lifetime => {200, ms}}),
+                timer:sleep(300),
+                wait_for_pool_state(ttl_pool, 2000, fun(U) ->
+                    maps:get(free_count, U) =:= 1 andalso maps:get(stopping_count, U) =:= 0
+                end),
+                [P2] = [P || {P, {_, free, _, _}} <- pooler:pool_stats(ttl_pool)],
+                ?assertNotEqual(ID1, pooled_gs:get_id(P2))
+            end},
+
+            {"jitter is applied to member expiry times", fun() ->
+                %% Use jitter large enough to produce varied expiry times,
+                %% but well below max_lifetime so validation passes.
+                %% Mainly exercises the rand:uniform branch in compute_expiry/1.
+                {ok, _} = pooler:new_pool(BaseConf#{
+                    init_count => 5,
+                    max_count => 5,
+                    max_lifetime => {500, ms},
+                    max_lifetime_jitter => {100, ms}
+                }),
+                wait_for_pool_state(ttl_pool, 1000, fun(U) -> maps:get(free_count, U) =:= 5 end),
+                %% After 700ms all members must have expired (min expiry = 500-100 = 400ms)
+                timer:sleep(700),
+                wait_for_pool_state(ttl_pool, 3000, fun(U) ->
+                    maps:get(free_count, U) =:= 5 andalso maps:get(stopping_count, U) =:= 0
+                end)
+            end},
+
+            {"at-take eviction safety net: take_member evicts expired head before timer fires", fun() ->
+                %% Exercise the rare path where the TTL timer message is still
+                %% behind take_member in the gen_server's mailbox.
+                %% sys:suspend prevents the gen_server from processing messages.
+                %% We enqueue take_member first, then wait past TTL so the timer
+                %% enqueues {ttl_expired,...} AFTER take. On resume, take runs
+                %% first and exercises evict_expired_heads -> remove_free_head.
+                {ok, _} = pooler:new_pool(BaseConf#{
+                    init_count => 1,
+                    max_count => 2,
+                    max_lifetime => {500, ms}
+                }),
+                wait_for_pool_state(ttl_pool, 1000, fun(U) -> maps:get(free_count, U) =:= 1 end),
+                [P1] = [P || {P, {_, free, _, _}} <- pooler:pool_stats(ttl_pool)],
+                ID1 = pooled_gs:get_id(P1),
+                ok = sys:suspend(ttl_pool),
+                Self = self(),
+                spawn_link(fun() ->
+                    P = pooler:take_member(ttl_pool, 3000),
+                    Self ! {taken, P}
+                end),
+                timer:sleep(50),
+                timer:sleep(600),
+                ok = sys:resume(ttl_pool),
+                P2 =
+                    receive
+                        {taken, V} -> V
+                    after 3000 ->
+                        error(timeout)
+                    end,
+                ?assertNotEqual(ID1, pooled_gs:get_id(P2))
             end}
         ]}.
 

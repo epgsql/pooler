@@ -14,6 +14,7 @@ with exclusive access to pool members using =pooler:take_member=.
 - *Blocked-caller queuing* — =take_member/2= queues callers with a timeout instead of immediately returning =error_no_members= when the pool is busy
 - *Responsive under slow workers* — member starts and stops run in supervised helper processes, never blocking the pool gen-server
 - *Survives service outages* — returns =error_no_members= during outages without risking a supervisor restart cascade
+- *Connection lifetime recycling* — =max_lifetime= proactively replaces members before external termination (firewalls, DB backends with hard connection limits); =max_lifetime_jitter= spreads expiry times to avoid thundering-herd evictions
 - *Group pools and load balancing* — pools can be grouped for random-selection load balancing across backends
 - *Fully supervised* — every process (members, starters, stoppers) lives under a supervision tree; shutting down a pool cleanly terminates all associated processes with no orphans
 - *Observability* — utilization stats, pool metrics, and structured logging
@@ -147,6 +148,58 @@ During a check, pool members that have not been used in more than
 The default value for =cull_interval= is ={1, min}=. You can disable
 culling by specifying a value os ={0, min}=. The =max_age= parameter
 defaults to ={30, sec}=.
+
+**** Connection lifetime recycling (max_lifetime)
+
+Some network infrastructure (firewalls, load balancers) and database backends impose a hard
+wall-clock limit on TCP connection lifetime.  Pooler can proactively recycle members before
+they are forcibly closed by setting =max_lifetime=:
+
+#+BEGIN_SRC erlang
+#{name => pg_pool,
+  init_count => 10,
+  max_count => 10,
+  start_mfa => {epgsql, connect, [...]},
+  max_lifetime => {1, hour}}
+#+END_SRC
+
+Members that reach their lifetime limit are replaced automatically:
+
+- *While idle* — a timer fires and the member is stopped and replaced without consumer
+  involvement.
+- *At take* — if a timer fires late, =take_member= detects expired members at the head of
+  the free list and evicts them inline before returning a live one.
+- *At return* — if a member's lifetime elapsed while it was in use, =return_member= stops
+  it and starts a replacement instead of putting it back in the free list.
+
+Members held by consumers past their TTL are never forcibly evicted — they are recycled
+cleanly when returned.
+
+To avoid a thundering-herd effect where all members expire simultaneously (likely when a
+fixed-size pool is first started), use =max_lifetime_jitter= to spread expiry times across
+a window:
+
+#+BEGIN_SRC erlang
+#{max_lifetime => {1, hour},
+  max_lifetime_jitter => {5, min}}
+#+END_SRC
+
+With this configuration each member's expiry is offset by a random value drawn uniformly
+from =[-jitter, +jitter]=.  A pool of 100 connections started together will expire spread
+over a 10-minute window rather than all at once.
+
+For pools with =init_count > 1=, setting =max_lifetime_jitter= is recommended whenever
+=max_lifetime= is used.  A good starting value is =max_lifetime / init_count=, which gives
+roughly one replacement per replacement-time window and keeps the pool continuously
+available throughout the rotation.
+
+The default for =max_lifetime_jitter= is ={0, sec}= (no spread).  =max_lifetime_jitter= must
+be strictly less than =max_lifetime=; pool start and reconfiguration fail with
+=jitter_must_be_less_than_max_lifetime= otherwise.  When =max_lifetime= is not configured,
+no TTL tracking is performed and there is zero per-operation overhead.
+
+Valid time units for =max_lifetime=, =max_lifetime_jitter=, and all other =time_spec()=
+values: =hour=, =min=, =sec=, =ms=, =mu= (microseconds).
 
 **** Member start timeout (member_start_timeout)
 
