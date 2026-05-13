@@ -186,8 +186,9 @@
 -type group_name() :: atom().
 %% The name of the group pool belongs to
 -type time_unit() :: hour | min | sec | ms | mu.
--type time_spec() :: {non_neg_integer(), time_unit()}.
-%% Human-friendly way to specify the amount of time
+-type time_spec() :: {non_neg_integer(), time_unit()} | non_neg_integer().
+%% Time value: either a `{Amount, Unit}' tuple or a plain non-negative integer
+%% (interpreted as milliseconds, consistent with Erlang timeout conventions).
 
 -type pool_config() ::
     #{
@@ -321,8 +322,8 @@ create_group_table() ->
 %% {@link take_group_member/1}, {@link return_group_member/2} and {@link group_pools/1}.</dd>
 %% <dt>`cull_interval'</dt>
 %% <dd>Default: `{1, min}'. Time between checks for stale pool members. Specified as
-%% `{Time, Unit}' where `Time' is a non-negative integer and `Unit' is
-%% one of `hour', `min', `sec', `ms', or `mu'.
+%% a `{Time, Unit}' tuple where `Unit' is one of `hour', `min', `sec', `ms', `mu',
+%% or as a plain non-negative integer (milliseconds).
 %% Triggers a once per `cull_interval' check to remove members that have not
 %% been accessed in `max_age' time units. Culling can be disabled by
 %% specifying a zero time vaule (e.g. `{0, min}'). Culling will also be
@@ -1739,7 +1740,9 @@ time_as_micros({Time, sec}) ->
 time_as_micros({Time, ms}) ->
     1000 * Time;
 time_as_micros({Time, mu}) ->
-    Time.
+    Time;
+time_as_micros(Time) when is_integer(Time) ->
+    Time * 1000.
 
 secs_between({Mega1, Secs1, _}, {Mega2, Secs2, _}) ->
     (Mega2 - Mega1) * 1000000 + (Secs2 - Secs1).

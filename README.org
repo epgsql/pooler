@@ -134,6 +134,7 @@ examples are valid:
 {2, min}
 {120, sec}
 {120000, ms}
+120000        %% plain integer — milliseconds, consistent with Erlang timeout conventions
 #+END_SRC
 
 The =cull_interval= determines the schedule when a check will be made
@@ -199,7 +200,8 @@ be strictly less than =max_lifetime=; pool start and reconfiguration fail with
 no TTL tracking is performed and there is zero per-operation overhead.
 
 Valid time units for =max_lifetime=, =max_lifetime_jitter=, and all other =time_spec()=
-values: =hour=, =min=, =sec=, =ms=, =mu= (microseconds).
+values: =hour=, =min=, =sec=, =ms=, =mu= (microseconds), or a plain non-negative integer
+(milliseconds).
 
 **** Member start timeout (member_start_timeout)
 
