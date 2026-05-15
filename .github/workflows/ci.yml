@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ["28.1", "27.3", "26.2", "25.3", "24.3"]
+        otp: ["29.0", "28.5", "27.3", "26.2", "25.3"]
         os: ["ubuntu-22.04"]
 
     steps:

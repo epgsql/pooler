@@ -17,8 +17,9 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-22.04"]
-        otp: ["27.3"]
+        otp: ["28.5"]
         from_version:
+            - "1.6.0"
             - "1.5.2"
 
     steps:

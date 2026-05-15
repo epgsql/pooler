@@ -1,6 +1,6 @@
 {application, pooler, [
     {description, "An OTP Process Pool Application"},
-    {vsn, "1.6.0"},
+    {vsn, "1.7.0"},
     {registered, [pooler_sup, pooler_starter_sup]},
     {applications, [
         kernel,
@@ -8,6 +8,6 @@
     ]},
     {mod, {pooler_app, []}},
     {env, []},
-    {licenses, ["Apache License 2.0"]},
+    {licenses, ["Apache-2.0"]},
     {links, [{"Github", "https://github.com/epgsql/pooler"}]}
 ]}.

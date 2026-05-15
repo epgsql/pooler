@@ -1,17 +1,19 @@
 % -*- mode: erlang -*-
-{"1.6.0",
-  [{<<"1\\.5\\.2.*">>,
+{"1.7.0",
+  [{<<"1\\.6\\.0.*">>,
     [{update, pooler, {advanced, []}},
+     %% pooler_starter processes are short-lived temporaries; any in-flight ones
+     %% will crash on the old code and the pool will notice via DOWN and retry.
      {load_module, pooler_starter},
      {load_module, pooler_app},
      {update, pooler_sup, supervisor},
      {update, pooler_pool_sup, supervisor},
-     {update, pooler_starter_sup, supervisor},
-     {update, pooler_pooled_worker_sup, supervisor},
-     {delete_module, pooler_config}]
+     {update, pooler_starter_sup, supervisor}]
    },
-   {<<"1\\.5\\.3.*">>,
+   {<<"1\\.5\\..*">>,
     [{update, pooler, {advanced, []}},
+     %% pooler_starter processes are short-lived temporaries; any in-flight ones
+     %% will crash on the old code and the pool will notice via DOWN and retry.
      {load_module, pooler_starter},
      {load_module, pooler_app},
      {update, pooler_sup, supervisor},

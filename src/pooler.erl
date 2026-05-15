@@ -859,11 +859,11 @@ terminate(_Reason, _State) ->
     ok.
 
 -spec code_change(_, _, _) -> {'ok', _}.
-%% pre-v2 tuple (24 elements) → v2
+%% pre-v2 tuple (24 elements, 1.5.2) → v2 (25 elements, same shape as 1.6.0)
 code_change(_OldVsn, OldState, Extra) when tuple_size(OldState) =:= 24 ->
     code_change(2, do_upgrade_pre_v2_to_v2(OldState), Extra);
-%% v2 tuple (26 elements) → v3
-code_change(2, OldState, Extra) when tuple_size(OldState) =:= 26 ->
+%% v2 tuple (25 elements, 1.6.0) → v3
+code_change(2, OldState, Extra) when tuple_size(OldState) =:= 25 ->
     code_change(3, do_upgrade_to_v3(OldState), Extra);
 %% v3 tuple (27 elements) → v4
 code_change(3, OldState, _Extra) when tuple_size(OldState) =:= 27 ->
@@ -871,8 +871,8 @@ code_change(3, OldState, _Extra) when tuple_size(OldState) =:= 27 ->
 code_change(_, State, _Extra) ->
     {ok, State}.
 
-%% Converts the pre-v2 (pre-1.6.0) 24-element pool tuple into the
-%% 26-element v2 shape, converting dict-based maps to Erlang maps.
+%% Converts the pre-v2 (1.5.2) 24-element pool tuple into the 25-element v2 shape
+%% (matching the 1.6.0 release): adds cull_timer=undefined and converts dict-based maps.
 do_upgrade_pre_v2_to_v2(
     {pool, Name, Group, MaxCount, InitCount, StartMFA, FreePids, InUseCount, FreeCount, AddMemberRetry, CullInterval,
         MaxAge, MemberSup, StarterSup, AllMembers, ConsumerToPid, StartingMembers, MemberStartTimeout,
@@ -881,18 +881,18 @@ do_upgrade_pre_v2_to_v2(
     {pool, Name, Group, MaxCount, InitCount, StartMFA, FreePids, InUseCount, FreeCount, AddMemberRetry, CullInterval,
         MaxAge, undefined, MemberSup, StarterSup, maps:from_list(dict:to_list(AllMembers)),
         maps:from_list(dict:to_list(ConsumerToPid)), StartingMembers, MemberStartTimeout, AutoGrowThreshold, StopMFA,
-        undefined, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}.
+        MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}.
 
-%% Converts a v2 26-element pool tuple to a v3 27-element pool tuple,
-%% adding stopping_count = 0.
+%% Converts a v2 25-element pool tuple to a v3 27-element pool tuple,
+%% adding initialize_mfa=undefined and stopping_count=0.
 do_upgrade_to_v3(
     {pool, Name, Group, MaxCount, InitCount, StartMFA, FreePids, InUseCount, FreeCount, AddMemberRetry, CullInterval,
         MaxAge, CullTimer, MemberSup, StarterSup, AllMembers, ConsumerToPid, StartingMembers, MemberStartTimeout,
-        AutoGrowThreshold, StopMFA, InitializeMFA, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}
+        AutoGrowThreshold, StopMFA, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}
 ) ->
     {pool, Name, Group, MaxCount, InitCount, StartMFA, FreePids, InUseCount, FreeCount, AddMemberRetry, CullInterval,
         MaxAge, CullTimer, MemberSup, StarterSup, AllMembers, ConsumerToPid, StartingMembers, 0, MemberStartTimeout,
-        AutoGrowThreshold, StopMFA, InitializeMFA, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}.
+        AutoGrowThreshold, StopMFA, undefined, MetricsMod, MetricsAPI, QueuedRequestors, QueueMax}.
 
 %% Converts a v3 27-element pool tuple to a v4 #pool{} record: inserts ttl=undefined
 %% and extends all_members entries from 3-tuples to 4-tuples.
