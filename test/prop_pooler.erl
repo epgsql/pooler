@@ -121,7 +121,7 @@ prop_fixed_take_return() ->
         start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
     },
     Stats = fun() ->
-        lists:sort([{Pid, State} || {Pid, {_, State, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
+        lists:sort([{Pid, State} || {Pid, {_, State, _, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
     end,
     ?FORALL(
         Size,
@@ -158,7 +158,7 @@ prop_fixed_take_return_broken() ->
         start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
     },
     Stats = fun() ->
-        lists:sort([{Pid, State} || {Pid, {_, State, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
+        lists:sort([{Pid, State} || {Pid, {_, State, _, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
     end,
     ?FORALL(
         Size,
@@ -208,7 +208,7 @@ prop_fixed_client_died() ->
         start_mfa => {pooled_gs, start_link, [{?FUNCTION_NAME}]}
     },
     Stats = fun() ->
-        lists:sort([{Pid, State} || {Pid, {_, State, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
+        lists:sort([{Pid, State} || {Pid, {_, State, _, _}} <- pooler:pool_stats(?FUNCTION_NAME)])
     end,
     ?FORALL(
         Size,
@@ -393,7 +393,7 @@ pool_is_utilized(Pool, Client, NumWorkers) ->
     %% All members are taken by Client
     ?assert(
         lists:all(
-            fun({_, {_, State, _}}) -> State =:= Client end,
+            fun({_, {_, State, _, _}}) -> State =:= Client end,
             pooler:pool_stats(Pool)
         )
     ),
@@ -412,7 +412,7 @@ pool_is_free(Pool, NumWorkers) ->
     %% All members are free
     ?assert(
         lists:all(
-            fun({_, {_, State, _}}) -> State =:= free end,
+            fun({_, {_, State, _, _}}) -> State =:= free end,
             pooler:pool_stats(Pool)
         )
     ),

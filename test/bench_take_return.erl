@@ -16,7 +16,14 @@
     size_0_max_500_take_return_all/1,
     bench_size_0_max_500_take_return_all/2,
     size_0_max_500_clients_50_take_return_all/1,
-    bench_size_0_max_500_clients_50_take_return_all/2
+    bench_size_0_max_500_clients_50_take_return_all/2,
+    %% TTL benchmarks
+    size_5_ttl_1h_take_return_one/1,
+    bench_size_5_ttl_1h_take_return_one/2,
+    size_20_ttl_5ms_take_return_one/1,
+    bench_size_20_ttl_5ms_take_return_one/2,
+    size_500_ttl_5ms_take_return_one/1,
+    bench_size_500_ttl_5ms_take_return_one/2
 ]).
 
 %% @doc Pool of fixed size 5 - try to take just one member and instantly return
@@ -221,6 +228,81 @@ bench_size_0_max_500_clients_50_take_return_all(_Input, {PoolName, _Size, Client
     Utilization = pooler:pool_utilization(PoolName),
     0 = proplists:get_value(free_count, Utilization),
     0 = proplists:get_value(in_use_count, Utilization).
+
+%% @doc Pool of fixed size 5 with a 1-hour TTL — members never expire during the run.
+%% Measures the per-operation overhead of TTL code paths (monotonic_time checks,
+%% timer-target comparisons) relative to the no-TTL baseline.
+size_5_ttl_1h_take_return_one(init) ->
+    start([
+        {name, ?FUNCTION_NAME},
+        {init_count, 5},
+        {max_count, 5},
+        {max_lifetime, {1, hour}}
+    ]),
+    ?FUNCTION_NAME;
+size_5_ttl_1h_take_return_one({input, _}) ->
+    [];
+size_5_ttl_1h_take_return_one({stop, PoolName}) ->
+    stop(PoolName).
+
+bench_size_5_ttl_1h_take_return_one(_Input, PoolName) ->
+    Member = pooler:take_member(PoolName),
+    true = is_pid(Member),
+    pooler:return_member(PoolName, Member).
+
+%% @doc "Ridiculous" extreme TTL benchmark: pool of 20 members with max_lifetime=5ms
+%% and jitter=4ms (effective expiry range 1–9ms).  Members expire many times per
+%% benchmark iteration, exercising the full eviction-replacement cycle at high
+%% frequency.  Takes may return error_no_members during replacement waves; those
+%% are counted but not penalised — the benchmark measures raw loop throughput.
+size_20_ttl_5ms_take_return_one(init) ->
+    start([
+        {name, ?FUNCTION_NAME},
+        {init_count, 20},
+        {max_count, 20},
+        {max_lifetime, {5, ms}},
+        {max_lifetime_jitter, {4, ms}}
+    ]),
+    ?FUNCTION_NAME;
+size_20_ttl_5ms_take_return_one({input, _}) ->
+    [];
+size_20_ttl_5ms_take_return_one({stop, PoolName}) ->
+    stop(PoolName).
+
+bench_size_20_ttl_5ms_take_return_one(_Input, PoolName) ->
+    case pooler:take_member(PoolName) of
+        error_no_members ->
+            ok;
+        Member ->
+            pooler:return_member(PoolName, Member)
+    end.
+
+%% @doc Pool of 500 members with 5ms TTL — exercises timer cascade eviction at scale.
+%% Single client holds at most 1 member at a time; the other 499 sit idle and expire
+%% via timer, triggering batched eviction+replacement waves.  Contrast with
+%% size_20_ttl_5ms: the larger idle population makes timer-driven eviction dominate
+%% over at-take eviction, and the replacement backlog is much larger.
+size_500_ttl_5ms_take_return_one(init) ->
+    start([
+        {name, ?FUNCTION_NAME},
+        {init_count, 500},
+        {max_count, 500},
+        {max_lifetime, {5, ms}},
+        {max_lifetime_jitter, {4, ms}}
+    ]),
+    ?FUNCTION_NAME;
+size_500_ttl_5ms_take_return_one({input, _}) ->
+    [];
+size_500_ttl_5ms_take_return_one({stop, PoolName}) ->
+    stop(PoolName).
+
+bench_size_500_ttl_5ms_take_return_one(_Input, PoolName) ->
+    case pooler:take_member(PoolName) of
+        error_no_members ->
+            ok;
+        Member ->
+            pooler:return_member(PoolName, Member)
+    end.
 
 %% Internal
 
