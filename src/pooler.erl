@@ -2113,10 +2113,6 @@ maybe_reply({Member, NewPool}) ->
             {reply, Member, NewPool}
     end.
 
-%% Implementation of a best-effort termination for a pool member:
-%% Terminates the pid's pool member given a MFA that gets applied. The list
-%% of arguments must contain the fixed atom ?POOLER_PID, which is replaced
-
 compute_utilization(#pool{
     max_count = MaxCount,
     in_use_count = InUseCount,

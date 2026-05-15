@@ -222,6 +222,9 @@ default_stop_mfa() ->
 stop_spec(PoolName, MemberPid, StopMFA) ->
     {PoolName, MemberPid, StopMFA}.
 
+%% @doc Best-effort termination for a pool member: applies the given MFA with
+%% `?POOLER_PID' and `?POOLER_POOL_NAME' placeholders replaced by the actual
+%% pid and pool name. Falls back to the default stop MFA on any failure.
 -spec terminate_pid(pooler:pool_name(), pid(), stop_mfa()) -> ok.
 terminate_pid(PoolName, Pid, {Mod, Fun, Args}) when is_list(Args) ->
     NewArgs = replace_placeholders(PoolName, Pid, Args),
