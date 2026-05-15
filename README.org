@@ -429,8 +429,8 @@ the pool config (or the =pooler= application environment).  Metrics are
 disabled by default.
 
 =metrics_api= selects the backend API: =folsom= (default when =metrics_mod= is
-set) or =exometer=.  =metrics_mod= is the module that implements the chosen API
-— e.g. =folsom_metrics= for folsom, or a custom module with a compatible interface.
+set), =exometer=, or =telemetry=.  =metrics_mod= is the module that implements
+the chosen API.
 
 #+BEGIN_SRC erlang
 #{name => my_pool,
@@ -441,15 +441,111 @@ set) or =exometer=.  =metrics_mod= is the module that implements the chosen API
 
 Ensure the metrics library is in your code path and has been started before pooler.
 
-When enabled, the following metrics will be tracked:
+When enabled, the following metrics are emitted:
 
-| Metric Label                       | Description                                                                 |
-| pooler.POOL_NAME.take_rate         | meter recording rate at which take_member is called                         |
-| pooler.POOL_NAME.stopping_count    | histogram tracking number of members currently being stopped asynchronously |
-| pooler.error_no_members_count      | counter indicating how many times take_member has returned error_no_members |
-| pooler.killed_free_count           | counter how many members have been killed when in the free state            |
-| pooler.killed_in_use_count         | counter how many members have been killed when in the in_use state          |
-| pooler.event                       | history various error conditions                                            |
+| Legacy name (type)                            | Telemetry event (type)                        | Telemetry tags    | Description                                            |
+| pooler.POOL.take_rate (meter)                 | =[pooler, take]= (counter)                    | pool_name         | Total =take_member= calls (compute rate at query time) |
+| pooler.POOL.free_count (histogram)            | =[pooler, free]= (gauge)                      | pool_name         | Number of free pool members                            |
+| pooler.POOL.in_use_count (histogram)          | =[pooler, in_use]= (gauge)                    | pool_name         | Number of in-use pool members                          |
+| pooler.POOL.stopping_count (histogram)        | =[pooler, stopping]= (gauge)                  | pool_name         | Number of members being stopped asynchronously         |
+| pooler.POOL.queue_count (histogram)           | =[pooler, queue]= (gauge)                     | pool_name         | Current depth of the request queue                     |
+| pooler.POOL.error_no_members_count (counter)  | =[pooler, error_no_members]= (counter)        | pool_name, reason | =take_member= calls returning =error_no_members=       |
+| pooler.POOL.killed_free_count (counter)       | =[pooler, killed_free]= (counter)             | pool_name, reason | Free members removed                                   |
+| pooler.POOL.killed_in_use_count (counter)     | =[pooler, killed_in_use]= (counter)           | pool_name, reason | In-use members removed                                 |
+| pooler.POOL.queue_max_reached (counter)       | =[pooler, queue_max_reached]= (counter)       | pool_name         | Times the request queue reached its maximum depth      |
+| pooler.POOL.starting_member_timeout (counter) | =[pooler, starting_member_timeout]= (counter) | pool_name         | Pool member start timeouts                             |
+
+The legacy APIs represent point-in-time gauges as =histogram= (a folsom
+workaround) and the call rate as a folsom =meter=.  The =telemetry= backend uses
+proper =gauge= and =counter= types.
+
+**** Telemetry API
+
+The =telemetry= backend passes a structured map instead of embedding the pool
+name in a flat binary metric name.  This makes it straightforward to integrate
+with =prometheus.erl= or =telemetry= without string parsing.
+
+Configure with =metrics_api => telemetry= and set =metrics_mod= to your handler module:
+
+#+BEGIN_SRC erlang
+#{name => my_pool,
+  ...,
+  metrics_mod => my_metrics,
+  metrics_api => telemetry}
+#+END_SRC
+
+Your module must export =execute/3=:
+
+#+BEGIN_SRC erlang
+%% EventName :: [pooler, MetricName]  e.g. [pooler, take], [pooler, free]
+%% Measurements :: #{count => N}      for counters
+%%               | #{value => N}      for gauges
+%% Metadata :: #{pool_name => atom(), type => counter | gauge, ...}
+%%             enriched counters also carry #{reason => atom()}
+
+execute([pooler, take], #{count := N}, #{pool_name := Pool}) ->
+    my_counter:inc(pooler_take_total, [Pool], N);
+execute([pooler, free], #{value := V}, #{pool_name := Pool}) ->
+    my_gauge:set(pooler_free, [Pool], V);
+execute([pooler, killed_free], #{count := 1}, #{pool_name := Pool, reason := Reason}) ->
+    my_counter:inc(pooler_killed_free_total, [Pool, Reason], 1);
+execute(_, _, _) ->
+    ok.
+#+END_SRC
+
+Event names use clean base atoms without the legacy =_count= / =_rate= suffix
+(e.g. =[pooler, free]= not =[pooler, free_count]=).  Enriched counters carry a
+=reason= key in metadata with values such as =max_lifetime=, =max_age=,
+=crashed=, =failed=, =reconfigured=, =at_capacity=, =all_in_use=.
+
+**** prometheus.erl adapter
+
+Use =pooler:metrics/0= to pre-declare all metrics at application startup — this
+avoids the "metric not found" error that =prometheus.erl= raises on first
+observation.
+
+#+BEGIN_SRC erlang
+setup() ->
+    [declare(M) || M <- pooler:metrics()],
+    ok.
+
+declare(#{name := N, type := counter, help := H, labels := Specs}) ->
+    LabelNames = [L || {L, _} <- Specs],
+    prometheus_counter:declare([{name, N}, {help, H}, {labels, LabelNames}]);
+declare(#{name := N, type := gauge, help := H, labels := Specs}) ->
+    LabelNames = [L || {L, _} <- Specs],
+    prometheus_gauge:declare([{name, N}, {help, H}, {labels, LabelNames}]);
+declare(_) ->
+    ok.
+
+%% In your metrics_mod:
+execute([pooler, Name], #{count := N}, #{pool_name := Pool, reason := Reason}) ->
+    prometheus_counter:inc(Name, [Pool, Reason], N);
+execute([pooler, Name], #{count := N}, #{pool_name := Pool}) ->
+    prometheus_counter:inc(Name, [Pool], N);
+execute([pooler, Name], #{value := V}, #{pool_name := Pool}) ->
+    prometheus_gauge:set(Name, [Pool], V);
+execute(_, _, _) ->
+    ok.
+#+END_SRC
+
+**** Pull-based (passive) metrics
+
+For gauge metrics, a scrape-based approach is often preferable to push
+callbacks: =pooler:pool_utilization(PoolName)= returns current utilization
+without depending on events being emitted.
+
+#+BEGIN_SRC erlang
+%% Returns a proplist:
+%% [{max_count,N}, {in_use_count,N}, {free_count,N},
+%%  {stopping_count,N}, {queued_count,N}, {queue_max,N}]
+pooler:pool_utilization(my_pool)
+#+END_SRC
+
+In a =prometheus_collector= behaviour, call =pool_utilization= on each scrape
+rather than relying on push callbacks — this guarantees gauges reflect the
+current state even when the pool is idle between =take_member= / =return_member=
+calls.
 
 *** Demo Quick Start
 

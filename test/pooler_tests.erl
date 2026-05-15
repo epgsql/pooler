@@ -2048,6 +2048,138 @@ count_errors(Result) ->
         Result
     ).
 
+pooler_telemetry_metrics_test_() ->
+    PoolConf = #{
+        name => telemetry_test_pool,
+        max_count => 3,
+        init_count => 2,
+        start_mfa => {pooled_gs, start_link, [{"type-0"}]},
+        metrics_mod => fake_metrics,
+        metrics_api => telemetry
+    },
+    {setup,
+        fun() ->
+            fake_metrics:start_link(),
+            application:set_env(pooler, pools, []),
+            ok = application:start(pooler),
+            {ok, _} = pooler:new_pool(PoolConf)
+        end,
+        fun(_) ->
+            fake_metrics:stop(),
+            application:stop(pooler)
+        end,
+        [
+            {"take and return emits well-formed telemetry events", fun() ->
+                fake_metrics:reset_metrics(),
+                P = pooler:take_member(telemetry_test_pool),
+                ?assert(is_pid(P)),
+                ok = pooler:return_member(telemetry_test_pool, P),
+                Emitted = fake_metrics:get_metrics(),
+                %% every event is a 3-tuple {[pooler, Label], Measurements, Metadata}
+                [
+                    ?assertMatch({[pooler, _], #{}, #{pool_name := telemetry_test_pool}}, E)
+                 || E <- Emitted
+                ],
+                %% take emits a counter with count key
+                TakeEvents = [{M, Meta} || {[pooler, take], M, Meta} <- Emitted],
+                ?assertMatch([{#{count := 1}, #{type := counter}} | _], TakeEvents),
+                %% gauge events use value key
+                GaugeEvents = [{M, Meta} || {[pooler, _], M, #{type := gauge} = Meta} <- Emitted],
+                ?assert(length(GaugeEvents) > 0),
+                [?assertMatch({#{value := _}, _}, GE) || GE <- GaugeEvents]
+            end},
+            {"no undeclared metrics are emitted", fun() ->
+                fake_metrics:reset_metrics(),
+                P = pooler:take_member(telemetry_test_pool),
+                pooler:return_member(telemetry_test_pool, P),
+                %% exhaust pool to trigger error_no_members
+                Ps = [
+                    pooler:take_member(telemetry_test_pool)
+                 || _ <- lists:seq(1, 3)
+                ],
+                timer:sleep(50),
+                [
+                    pooler:return_member(telemetry_test_pool, Pid)
+                 || Pid <- Ps, is_pid(Pid)
+                ],
+                Emitted = fake_metrics:get_metrics(),
+                DeclaredNames = [N || #{name := N} <- pooler:metrics()],
+                [
+                    ?assert(
+                        lists:member(Label, DeclaredNames),
+                        {undeclared_metric, Label}
+                    )
+                 || {[pooler, Label], _Measurements, _Metadata} <- Emitted
+                ]
+            end},
+            {"error_no_members counter carries reason tag", fun() ->
+                fake_metrics:reset_metrics(),
+                %% take all members so next take returns error_no_members at_capacity
+                Ps = [
+                    pooler:take_member(telemetry_test_pool)
+                 || _ <- lists:seq(1, 3)
+                ],
+                ?assertEqual(error_no_members, pooler:take_member(telemetry_test_pool)),
+                timer:sleep(50),
+                [
+                    pooler:return_member(telemetry_test_pool, Pid)
+                 || Pid <- Ps, is_pid(Pid)
+                ],
+                Emitted = fake_metrics:get_metrics(),
+                ErrEvents = [Meta || {[pooler, error_no_members], _, Meta} <- Emitted],
+                ?assert(length(ErrEvents) > 0),
+                [?assertMatch(#{reason := at_capacity}, Meta) || Meta <- ErrEvents]
+            end},
+            {"no flat binary metric names are emitted", fun() ->
+                fake_metrics:reset_metrics(),
+                P = pooler:take_member(telemetry_test_pool),
+                pooler:return_member(telemetry_test_pool, P),
+                Emitted = fake_metrics:get_metrics(),
+                %% all event names must be [pooler, atom()] lists, not binaries
+                BinaryNames = [N || {N, _, _} <- Emitted, is_binary(N)],
+                ?assertEqual([], BinaryNames)
+            end}
+        ]}.
+
+pooler_metrics_info_test_() ->
+    [
+        {"metrics/0 returns expected count and shape", fun() ->
+            Metrics = pooler:metrics(),
+            ?assertEqual(10, length(Metrics)),
+            [
+                ?assertMatch(#{name := _, type := _, help := _, labels := [_ | _]}, M)
+             || M <- Metrics
+            ]
+        end},
+        {"metrics/0 has no histogram or meter types", fun() ->
+            Metrics = pooler:metrics(),
+            Types = [T || #{type := T} <- Metrics],
+            ?assertEqual([], [T || T <- Types, T =:= histogram orelse T =:= meter])
+        end},
+        {"killed_free has pool_name + reason labels in position order", fun() ->
+            Metrics = pooler:metrics(),
+            {value, M} = lists:search(fun(#{name := N}) -> N =:= killed_free end, Metrics),
+            ?assertMatch(#{labels := [{pool_name, any}, {reason, [_ | _]}]}, M)
+        end},
+        {"all counter metrics with reason label declare known reason values", fun() ->
+            Metrics = pooler:metrics(),
+            WithReason = [
+                M
+             || #{labels := Labels} = M <- Metrics,
+                lists:keymember(reason, 1, Labels)
+            ],
+            ?assert(length(WithReason) > 0),
+            [
+                begin
+                    {reason, Values} = lists:keyfind(reason, 1, maps:get(labels, M)),
+                    ?assert(is_list(Values)),
+                    ?assert(length(Values) > 0)
+                end
+             || M <- WithReason
+            ]
+        end}
+    ].
+
 % testing crash recovery means race conditions when either pids
 % haven't yet crashed or pooler hasn't recovered.  So this helper loops
 % forver until N pids are obtained, ignoring error_no_members.
