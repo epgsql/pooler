@@ -14,6 +14,7 @@
 -export([
     start_link/0,
     notify/3,
+    execute/3,
     get_metrics/0,
     reset_metrics/0,
     stop/0
@@ -41,6 +42,9 @@ start_link() ->
 
 notify(Name, Value, Type) ->
     gen_server:cast(?SERVER, {Name, Value, Type}).
+
+execute(EventName, Measurements, Metadata) ->
+    gen_server:cast(?SERVER, {EventName, Measurements, Metadata}).
 
 reset_metrics() ->
     gen_server:call(?SERVER, reset).

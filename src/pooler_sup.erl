@@ -25,11 +25,9 @@ init([]) ->
                 []
         end,
     {MetricsApi, MetricsMod} = metrics_module(),
+    Defaults = #{metrics_mod => MetricsMod, metrics_api => MetricsApi},
     PoolSupSpecs = [
-        pool_sup_spec((pooler:config_as_map(Config))#{
-            metrics_mod => MetricsMod,
-            metrics_api => MetricsApi
-        })
+        pool_sup_spec(maps:merge(Defaults, pooler:config_as_map(Config)))
      || Config <- Configs
     ],
     try
@@ -57,10 +55,13 @@ new_pool(PoolConfig) ->
 %% public API for this functionality is {@link pooler:pool_child_spec/1}.
 pool_child_spec(PoolConfig) ->
     {MetricsApi, MetricsMod} = metrics_module(),
-    pool_sup_spec(PoolConfig#{
-        metrics_mod => MetricsMod,
-        metrics_api => MetricsApi
-    }).
+    %% Application-level metrics config acts as defaults; per-pool config takes precedence.
+    pool_sup_spec(
+        maps:merge(
+            #{metrics_mod => MetricsMod, metrics_api => MetricsApi},
+            PoolConfig
+        )
+    ).
 
 %% @doc Shutdown the named pool.
 rm_pool(Name) ->

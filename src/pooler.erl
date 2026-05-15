@@ -42,7 +42,8 @@
     rm_pool/1,
     rm_group/1,
     call_free_members/2,
-    call_free_members/3
+    call_free_members/3,
+    metrics/0
 ]).
 -export([create_group_table/0, config_as_map/1, to_map/1]).
 
@@ -66,7 +67,20 @@
 %% ------------------------------------------------------------------
 %% Types
 %% ------------------------------------------------------------------
--export_type([pool_config/0, pool_config_legacy/0, pool_name/0, group_name/0, member_info/0, time_unit/0, time_spec/0]).
+-export_type([
+    pool_config/0,
+    pool_config_legacy/0,
+    pool_name/0,
+    group_name/0,
+    member_info/0,
+    time_unit/0,
+    time_spec/0,
+    metric_type/0,
+    label_values/0,
+    label_spec/0,
+    metric_name/0,
+    metric_info/0
+]).
 
 -define(DEFAULT_ADD_RETRY, 1).
 -define(DEFAULT_CULL_INTERVAL, {1, min}).
@@ -173,7 +187,7 @@
 
     %% The API used to call the metrics system. It supports both Folsom
     %% and Exometer format.
-    metrics_api = folsom :: 'folsom' | 'exometer',
+    metrics_api = folsom :: 'folsom' | 'exometer' | 'telemetry',
 
     %% A queue of requestors for blocking take member requests
     queued_requestors = queue:new() :: requestor_queue(),
@@ -201,7 +215,7 @@
         max_age => time_spec(),
         member_start_timeout => time_spec(),
         queue_max => non_neg_integer(),
-        metrics_api => folsom | exometer,
+        metrics_api => folsom | exometer | telemetry,
         metrics_mod => module(),
         stop_mfa => pooler_starter:stop_mfa(),
         initialize_mfa => {module(), atom(), ['$pooler_pid' | '$pooler_pool_name' | any(), ...]},
@@ -231,7 +245,7 @@
         | {max_age, time_spec()}
         | {member_start_timeout, time_spec()}
         | {queue_max, non_neg_integer()}
-        | {metrics_api, folsom | exometer}
+        | {metrics_api, folsom | exometer | telemetry}
         | {metrics_mod, module()}
         | {stop_mfa, pooler_starter:stop_mfa()}
         | {initialize_mfa, undefined | {module(), atom(), ['$pooler_pid' | '$pooler_pool_name' | any(), ...]}}
@@ -264,7 +278,30 @@
     | {'add_pids_failed', non_neg_integer(), non_neg_integer()}
     | {'inc', 1}
     | 'error_no_members'.
--type metric_type() :: 'counter' | 'histogram' | 'history' | 'meter'.
+-type metric_type() :: 'counter' | 'gauge' | 'histogram' | 'history' | 'meter'.
+
+%% Metric descriptor types for pooler:metrics/0.
+%% label_values: 'any' = open-ended (e.g. pool_name), list = fixed known set.
+%% Order of label_spec list is significant — matches positional label order in prometheus.erl.
+-type label_values() :: any | [atom()].
+-type label_spec() :: {Name :: atom(), label_values()}.
+-type metric_name() ::
+    take
+    | free
+    | in_use
+    | stopping
+    | queue
+    | error_no_members
+    | killed_free
+    | killed_in_use
+    | queue_max_reached
+    | starting_member_timeout.
+-type metric_info() :: #{
+    name := metric_name(),
+    type := metric_type(),
+    help := binary(),
+    labels := [label_spec()]
+}.
 
 %% ------------------------------------------------------------------
 %% Application API
@@ -574,6 +611,87 @@ group_pools(GroupName) ->
 pool_utilization(PoolName) ->
     gen_server:call(PoolName, pool_utilization).
 
+%% @doc Returns descriptors for all metrics emitted by pooler when `metrics_api = telemetry'.
+%%
+%% Each descriptor is a map with keys `name', `type', `help', and `labels'.
+%% `name' is the atom used in the telemetry event name `[pooler, Name]'.
+%% `labels' is a proplist `[{LabelName, LabelValues}]' where `LabelValues' is
+%% `any' for open-ended values or a list of the known atoms.
+%% The order of entries in `labels' matches the positional label order expected by prometheus.erl.
+%%
+%% Intended use: pre-declare prometheus metrics at application startup, e.g.:
+%% ```
+%%   [declare(M) || M <- pooler:metrics()]
+%% '''
+%%
+%% Note: for gauge-type metrics (`free', `in_use', `stopping', `queue'), consider using
+%% `pool_utilization/1' with a prometheus_collector instead — it reads current values
+%% on each scrape rather than relying on push events from take/return calls.
+-spec metrics() -> [metric_info()].
+metrics() ->
+    [
+        #{
+            name => take,
+            type => counter,
+            labels => [{pool_name, any}],
+            help => <<"Total take_member calls (compute rate at query time)">>
+        },
+        #{
+            name => free,
+            type => gauge,
+            labels => [{pool_name, any}],
+            help => <<"Number of free pool members">>
+        },
+        #{
+            name => in_use,
+            type => gauge,
+            labels => [{pool_name, any}],
+            help => <<"Number of in-use pool members">>
+        },
+        #{
+            name => stopping,
+            type => gauge,
+            labels => [{pool_name, any}],
+            help => <<"Number of pool members being stopped">>
+        },
+        #{
+            name => error_no_members,
+            type => counter,
+            labels => [{pool_name, any}, {reason, [at_capacity, all_in_use]}],
+            help => <<"Count of take_member calls returning error_no_members">>
+        },
+        #{
+            name => killed_free,
+            type => counter,
+            labels => [{pool_name, any}, {reason, [max_lifetime, max_age, crashed, reconfigured]}],
+            help => <<"Count of free pool members removed">>
+        },
+        #{
+            name => killed_in_use,
+            type => counter,
+            labels => [{pool_name, any}, {reason, [max_lifetime, crashed, failed]}],
+            help => <<"Count of in-use pool members removed">>
+        },
+        #{
+            name => queue_max_reached,
+            type => counter,
+            labels => [{pool_name, any}],
+            help => <<"Count of times the request queue reached its maximum depth">>
+        },
+        #{
+            name => queue,
+            type => gauge,
+            labels => [{pool_name, any}],
+            help => <<"Current depth of the request queue">>
+        },
+        #{
+            name => starting_member_timeout,
+            type => counter,
+            labels => [{pool_name, any}],
+            help => <<"Count of pool member start timeouts">>
+        }
+    ].
+
 %% @doc Invokes `Fun' with arity 1 over all free members in pool with `PoolName'.
 %%
 -spec call_free_members(pool_name() | pid(), fun((pid()) -> term())) -> Res when
@@ -693,7 +811,7 @@ handle_info({'DOWN', MRef, process, Pid, Reason}, State) ->
                     all_members = maps:remove(Pid, State#pool.all_members),
                     stopping_count = State#pool.stopping_count - 1
                 },
-                send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, histogram),
+                send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, gauge),
                 case Flag of
                     replace -> add_members_async(1, Pool1);
                     no_replace -> Pool1
@@ -727,7 +845,7 @@ handle_info({ttl_expired, Pid}, #pool{ttl = TTL} = Pool) ->
     Pool2 =
         case maps:get(Pid, Pool1#pool.all_members, undefined) of
             {_, free, _, _} ->
-                remove_pid(Pid, Pool1, replace);
+                remove_pid(Pid, Pool1, replace, max_lifetime);
             _ ->
                 %% In-use, stopping, or already gone — return path handles it
                 Pool1
@@ -896,8 +1014,8 @@ maybe_reply_with_pid(
 reply_to_queued_requestor(TRef, Pid, From = {APid, _}, NewQueuedRequestors, Pool) when is_pid(APid) ->
     erlang:cancel_timer(TRef),
     Pool1 = take_member_bookkeeping(Pid, From, NewQueuedRequestors, Pool),
-    send_metric(Pool, in_use_count, Pool1#pool.in_use_count, histogram),
-    send_metric(Pool, free_count, Pool1#pool.free_count, histogram),
+    send_metric(Pool, in_use_count, Pool1#pool.in_use_count, gauge),
+    send_metric(Pool, free_count, Pool1#pool.free_count, gauge),
     send_metric(Pool, events, error_no_members, history),
     gen_server:reply(From, Pid),
     Pool1.
@@ -1027,7 +1145,7 @@ take_member_from_pool(
     } = Pool,
     From
 ) ->
-    send_metric(Pool, take_rate, 1, meter),
+    send_metric(Pool, take_rate, {inc, 1}, counter),
     Pool0 = evict_expired_heads(Pool),
     Pool1 = remove_stale_starting_members(Pool0, Pool0#pool.starting_members, StartTimeout),
     NonStaleStartingMemberCount = length(Pool1#pool.starting_members),
@@ -1037,7 +1155,7 @@ take_member_from_pool(
     NumCanAdd = Max - (NumInUse + NumFree + NonStaleStartingMemberCount + StoppingCount),
     case Pool1#pool.free_pids of
         [] when NumCanAdd =< 0 ->
-            send_metric(Pool, error_no_members_count, {inc, 1}, counter),
+            send_metric(Pool, error_no_members_count, {inc, 1}, counter, #{reason => at_capacity}),
             send_metric(Pool, events, error_no_members, history),
             {error_no_members, Pool1};
         [] when NumCanAdd > 0 ->
@@ -1050,7 +1168,7 @@ take_member_from_pool(
             %% enabled).
             NumToAdd = max(min(InitCount - NonStaleStartingMemberCount, NumCanAdd), 1),
             Pool2 = add_members_async(NumToAdd, Pool1),
-            send_metric(Pool, error_no_members_count, {inc, 1}, counter),
+            send_metric(Pool, error_no_members_count, {inc, 1}, counter, #{reason => all_in_use}),
             send_metric(Pool, events, error_no_members, history),
             {error_no_members, Pool2};
         [Pid | Rest] ->
@@ -1067,8 +1185,8 @@ take_member_from_pool(
                     _ ->
                         Pool2
                 end,
-            send_metric(Pool, in_use_count, Pool3#pool.in_use_count, histogram),
-            send_metric(Pool, free_count, Pool3#pool.free_count, histogram),
+            send_metric(Pool, in_use_count, Pool3#pool.in_use_count, gauge),
+            send_metric(Pool, free_count, Pool3#pool.free_count, gauge),
             {Pid, Pool3}
     end.
 
@@ -1095,7 +1213,7 @@ take_member_from_pool_queued(
             {error_no_members, Pool1};
         {{error_no_members, Pool1 = #pool{queued_requestors = QueuedRequestors}}, QueueCount} ->
             TRef = erlang:send_after(Timeout, self(), {requestor_timeout, From}),
-            send_metric(Pool1, queue_count, QueueCount, histogram),
+            send_metric(Pool1, queue_count, QueueCount, gauge),
             {queued, Pool1#pool{queued_requestors = queue:in({From, TRef}, QueuedRequestors)}};
         {{Member, NewPool}, _} when is_pid(Member) ->
             {Member, NewPool}
@@ -1163,8 +1281,8 @@ do_return_member(
                     pooler_starter_sup:new_stopper(
                         pooler_starter:stop_spec(PoolName, Pid, Pool2#pool.stop_mfa)
                     ),
-                    send_metric(Pool2, killed_in_use_count, {inc, 1}, counter),
-                    send_metric(Pool2, stopping_count, Pool2#pool.stopping_count, histogram),
+                    send_metric(Pool2, killed_in_use_count, {inc, 1}, counter, #{reason => max_lifetime}),
+                    send_metric(Pool2, stopping_count, Pool2#pool.stopping_count, gauge),
                     Pool2;
                 false ->
                     Entry = {MRef, free, os:timestamp(), ExpTs},
@@ -1192,7 +1310,7 @@ do_return_member(Pid, fail, #pool{all_members = AllMembers} = Pool) ->
             Pool;
         {_MRef, _, _, _} ->
             %% replacement is triggered when the member's DOWN arrives
-            remove_pid(Pid, Pool, replace);
+            remove_pid(Pid, Pool, replace, failed);
         undefined ->
             Pool
     end.
@@ -1242,7 +1360,7 @@ handle_unexpected_member_down(Pid, Pool) ->
                 free_count = Pool#pool.free_count - 1,
                 all_members = maps:remove(Pid, AllMembers)
             },
-            send_metric(Pool1, killed_free_count, {inc, 1}, counter),
+            send_metric(Pool1, killed_free_count, {inc, 1}, counter, #{reason => crashed}),
             Pool2 =
                 case Pool1#pool.ttl of
                     #ttl{timer_target = Pid} = TTL ->
@@ -1257,7 +1375,7 @@ handle_unexpected_member_down(Pid, Pool) ->
                 all_members = maps:remove(Pid, AllMembers),
                 consumer_to_pid = cpmap_remove(Pid, CPid, Pool#pool.consumer_to_pid)
             },
-            send_metric(Pool1, killed_in_use_count, {inc, 1}, counter),
+            send_metric(Pool1, killed_in_use_count, {inc, 1}, counter, #{reason => crashed}),
             add_members_async(1, Pool1);
         undefined ->
             Pool
@@ -1270,8 +1388,8 @@ handle_unexpected_member_down(Pid, Pool) ->
 % immediately.  The pool learns the member has actually died via its
 % monitor DOWN message.
 %
--spec remove_pid(pid(), #pool{}, replace | no_replace) -> #pool{}.
-remove_pid(Pid, Pool, Flag) ->
+-spec remove_pid(pid(), #pool{}, replace | no_replace, atom()) -> #pool{}.
+remove_pid(Pid, Pool, Flag, Reason) ->
     #pool{
         name = PoolName,
         all_members = AllMembers,
@@ -1287,8 +1405,8 @@ remove_pid(Pid, Pool, Flag) ->
                 all_members = AllMembers#{Pid => {MRef, {stopping, Flag}, Time, ExpTs}}
             },
             pooler_starter_sup:new_stopper(pooler_starter:stop_spec(PoolName, Pid, StopMFA)),
-            send_metric(Pool1, killed_free_count, {inc, 1}, counter),
-            send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, histogram),
+            send_metric(Pool1, killed_free_count, {inc, 1}, counter, #{reason => Reason}),
+            send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, gauge),
             case Pool1#pool.ttl of
                 #ttl{timer_target = Pid} = TTL ->
                     reschedule_ttl_timer(Pool1#pool{ttl = TTL#ttl{timer_target = undefined}});
@@ -1303,8 +1421,8 @@ remove_pid(Pid, Pool, Flag) ->
                 consumer_to_pid = cpmap_remove(Pid, CPid, CPMap)
             },
             pooler_starter_sup:new_stopper(pooler_starter:stop_spec(PoolName, Pid, StopMFA)),
-            send_metric(Pool1, killed_in_use_count, {inc, 1}, counter),
-            send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, histogram),
+            send_metric(Pool1, killed_in_use_count, {inc, 1}, counter, #{reason => Reason}),
+            send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, gauge),
             Pool1;
         undefined ->
             ?LOG_ERROR(
@@ -1382,7 +1500,7 @@ cull_members_from_pool(
                     expired_free_members(MemberInfo, os:timestamp(), MaxAge),
                 CullList = lists:sublist(ExpiredMembers, MaxCull),
                 lists:foldl(
-                    fun({CullMe, _}, S) -> remove_pid(CullMe, S, no_replace) end,
+                    fun({CullMe, _}, S) -> remove_pid(CullMe, S, no_replace, max_age) end,
                     Pool,
                     CullList
                 );
@@ -1581,7 +1699,7 @@ apply_reconfigure_action({set_parameter, {Name, Value}}, Pool) ->
 apply_reconfigure_action({start_workers, Count}, Pool) ->
     add_members_async(Count, Pool);
 apply_reconfigure_action({stop_free_workers, Count}, #pool{free_pids = Free} = Pool) ->
-    lists:foldl(fun(P, S) -> remove_pid(P, S, no_replace) end, Pool, lists:sublist(Free, Count));
+    lists:foldl(fun(P, S) -> remove_pid(P, S, no_replace, reconfigured) end, Pool, lists:sublist(Free, Count));
 apply_reconfigure_action({shrink_queue, Count}, #pool{queued_requestors = Q} = Pool) ->
     {ToShrink, ToKeep} = lists:split(Count, queue:to_list(Q)),
     [gen_server:reply(From, error_no_members) || {From, _TRef} <- ToShrink],
@@ -1648,55 +1766,71 @@ set_parameter(auto_grow_threshold, Value, Pool) ->
     Value :: metric_value(),
     Type :: metric_type()
 ) -> ok.
-send_metric(#pool{metrics_mod = pooler_no_metrics}, _Label, _Value, _Type) ->
+send_metric(Pool, Label, Value, Type) ->
+    send_metric(Pool, Label, Value, Type, #{}).
+
+-spec send_metric(
+    Pool :: #pool{},
+    Label :: atom(),
+    Value :: metric_value(),
+    Type :: metric_type(),
+    ExtraTags :: #{atom() => term()}
+) -> ok.
+send_metric(#pool{metrics_mod = pooler_no_metrics}, _Label, _Value, _Type, _ExtraTags) ->
     ok;
+%% Folsom/exometer backward compat: gauge was historically histogram for these APIs.
+send_metric(#pool{metrics_api = A} = Pool, Label, Value, gauge, ExtraTags) when
+    A =:= folsom; A =:= exometer
+->
+    send_metric(Pool, Label, Value, histogram, ExtraTags);
+%% Telemetry and exometer do not support history type metrics.
+send_metric(#pool{metrics_api = A}, _Label, _Value, history, _ExtraTags) when
+    A =:= telemetry; A =:= exometer
+->
+    ok;
+%% Exometer counter: unwrap {inc, N} to a plain value.
 send_metric(
-    #pool{
-        name = PoolName,
-        metrics_mod = MetricsMod,
-        metrics_api = exometer
-    },
+    #pool{name = PoolName, metrics_mod = MetricsMod, metrics_api = exometer},
     Label,
     {inc, Value},
-    counter
+    counter,
+    _ExtraTags
 ) ->
     MetricName = pool_metric_exometer(PoolName, Label),
     MetricsMod:update_or_create(MetricName, Value, counter, []),
     ok;
-% Exometer does not support 'history' type metrics right now.
 send_metric(
-    #pool{
-        name = _PoolName,
-        metrics_mod = _MetricsMod,
-        metrics_api = exometer
-    },
-    _Label,
-    _Value,
-    history
-) ->
-    ok;
-send_metric(
-    #pool{
-        name = PoolName,
-        metrics_mod = MetricsMod,
-        metrics_api = exometer
-    },
+    #pool{name = PoolName, metrics_mod = MetricsMod, metrics_api = exometer},
     Label,
     Value,
-    Type
+    Type,
+    _ExtraTags
 ) ->
     MetricName = pool_metric_exometer(PoolName, Label),
     MetricsMod:update_or_create(MetricName, Value, Type, []),
     ok;
-%folsom API is the default one.
+%% Folsom API is the default one.
 send_metric(
     #pool{name = PoolName, metrics_mod = MetricsMod, metrics_api = folsom},
     Label,
     Value,
-    Type
+    Type,
+    _ExtraTags
 ) ->
     MetricName = pool_metric(PoolName, Label),
     MetricsMod:notify(MetricName, Value, Type),
+    ok;
+%% Telemetry API.
+send_metric(
+    #pool{name = PoolName, metrics_mod = MetricsMod, metrics_api = telemetry},
+    Label,
+    Value,
+    Type,
+    ExtraTags
+) ->
+    {Measurements, EventMeta} = telemetry_measurements(Value, Type),
+    Metadata = maps:merge(ExtraTags, EventMeta#{pool_name => PoolName, type => Type}),
+    MetricsMod:execute([pooler, telemetry_label(Label)], Measurements, Metadata),
     ok.
 
 -spec pool_metric(atom(), atom()) -> binary().
@@ -1716,6 +1850,23 @@ pool_metric_exometer(PoolName, Metric) ->
         atom_to_binary(PoolName, utf8),
         atom_to_binary(Metric, utf8)
     ].
+
+-spec telemetry_label(atom()) -> atom().
+telemetry_label(take_rate) -> take;
+telemetry_label(free_count) -> free;
+telemetry_label(in_use_count) -> in_use;
+telemetry_label(stopping_count) -> stopping;
+telemetry_label(error_no_members_count) -> error_no_members;
+telemetry_label(killed_free_count) -> killed_free;
+telemetry_label(killed_in_use_count) -> killed_in_use;
+telemetry_label(queue_count) -> queue;
+telemetry_label(Label) -> Label.
+
+-spec telemetry_measurements(metric_value(), metric_type()) ->
+    {#{atom() => term()}, #{atom() => term()}}.
+telemetry_measurements({inc, N}, counter) -> {#{count => N}, #{}};
+telemetry_measurements(N, _) when is_integer(N) -> {#{value => N}, #{}};
+telemetry_measurements(Reason, history) -> {#{count => 1}, #{reason => Reason}}.
 
 -spec time_as_secs(time_spec()) -> non_neg_integer().
 time_as_secs({Time, Unit}) ->
@@ -1808,8 +1959,8 @@ remove_free_head(
         all_members = AllMembers#{Pid => {MRef, {stopping, replace}, Time, ExpTs}}
     },
     pooler_starter_sup:new_stopper(pooler_starter:stop_spec(PoolName, Pid, StopMFA)),
-    send_metric(Pool1, killed_free_count, {inc, 1}, counter),
-    send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, histogram),
+    send_metric(Pool1, killed_free_count, {inc, 1}, counter, #{reason => max_lifetime}),
+    send_metric(Pool1, stopping_count, Pool1#pool.stopping_count, gauge),
     case TTL#ttl.timer_target of
         Pid ->
             case TTL#ttl.timer of
