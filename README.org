@@ -137,18 +137,25 @@ examples are valid:
 120000        %% plain integer — milliseconds, consistent with Erlang timeout conventions
 #+END_SRC
 
-The =cull_interval= determines the schedule when a check will be made
-for stale members. Checks are scheduled using =erlang:send_after/3=
-which provides a light-weight timing mechanism. The next check is
-scheduled after the prior check completes.
+The =cull_interval= sets how often a cull check runs.  Checks are
+scheduled using =erlang:send_after/3=; the next check is scheduled
+after the prior one completes.  Set to ={0, min}= to disable culling
+entirely.  Default: ={15, sec}=.
 
-During a check, pool members that have not been used in more than
-=max_age= minutes will be removed until the pool size reaches
-=init_count=.
+=max_age= is the demand memory window.  Pooler tracks the peak
+concurrent in-use count over the last =max_age= period.  At each cull
+tick the pool is sized to that peak (floored at =init_count=); workers
+beyond the peak are removed oldest-idle-first.  Default: ={30, sec}=.
 
-The default value for =cull_interval= is ={1, min}=. You can disable
-culling by specifying a value os ={0, min}=. The =max_age= parameter
-defaults to ={30, sec}=.
+In practice this means: after a traffic burst the pool holds its
+grown size for up to =max_age= time, then shrinks back to =init_count=
+once no burst is recorded in the window.
+
+The most natural configuration is =cull_interval ≤ max_age= (check
+more often than you forget) — the defaults satisfy this.  Setting
+=cull_interval > max_age= is valid: the pool still shrinks correctly,
+but the memory window is shorter than the check interval, which is an
+unusual combination that rarely makes sense in practice.
 
 **** Connection lifetime recycling (max_lifetime)
 
@@ -216,9 +223,11 @@ The value is a =time_spec()= tuple; the default is ={1, min}=.
 
 **** Request queue limit (queue_max)
 
-When all pool members are in use, =take_member= calls are queued up to
-=queue_max= entries (default =50=).  Callers beyond this limit receive
-=error_no_members= immediately rather than waiting.  Set it to =0= to disable
+When all pool members are in use, =take_member/2= calls (those with an explicit
+timeout) are queued up to =queue_max= entries (default =50=) and wait for a
+member to become available.  =take_member/1= always returns =error_no_members=
+immediately and is never queued.  Callers beyond the =queue_max= limit also
+receive =error_no_members= immediately.  Set =queue_max= to =0= to disable
 queuing entirely.
 
 #+BEGIN_SRC erlang
@@ -403,6 +412,32 @@ moment, so surplus shards sit permanently empty.
 members stay on their original shards and new starts fill the added shards
 round-robin until churn rebalances things.  /Decreasing/ is not supported and
 returns ={error, num_member_sups_cannot_be_decreased}=.
+
+**** Worker dispatch order (member_order)
+
+Controls which free worker is handed out on each =take_member= call.
+
+- =lifo= (default, stack) — the most recently returned worker is taken first.
+  Under steady load a small working set stays warm; idle workers accumulate at
+  the back and are culled.  Good for connection pools where keeping a
+  connection recently used matters (e.g. avoids idle-timeout disconnects on
+  hot connections).
+
+- =fifo= (queue) — the worker that has been idle the longest is taken first,
+  producing round-robin rotation across the whole pool.  Load is spread evenly;
+  no single worker becomes a hot spot.
+
+#+BEGIN_SRC erlang
+#{name => pg_pool,
+  init_count => 10,
+  max_count => 50,
+  start_mfa => {epgsql, connect, [...]},
+  member_order => fifo}   %% round-robin; default is lifo (stack)
+#+END_SRC
+
+Both modes produce identical cull behaviour for the same =cull_interval= /
+=max_age= configuration — only which worker is handed out next differs.
+=member_order= can be changed at runtime via =pooler:pool_reconfigure/2=.
 
 *** Pool Configuration via =pooler:new_pool=
 You can create pools using =pooler:new_pool/1= when accepts a

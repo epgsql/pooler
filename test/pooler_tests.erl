@@ -1313,6 +1313,7 @@ reconfigure_test_() ->
                 ?assertEqual(
                     {ok, [
                         {set_parameter, {init_count, 3}},
+                        {rebuild_demand_buf},
                         {start_workers, 1}
                     ]},
                     pooler:pool_reconfigure(Name, Config1)
@@ -1331,7 +1332,9 @@ reconfigure_test_() ->
                 ?assertEqual(
                     {ok, [
                         {set_parameter, {init_count, 1}},
+                        {rebuild_demand_buf},
                         {set_parameter, {max_count, 1}},
+                        {rebuild_demand_buf},
                         {stop_free_workers, 1}
                     ]},
                     pooler:pool_reconfigure(Name, Config1)
@@ -1409,6 +1412,7 @@ reconfigure_test_() ->
                 ?assertEqual(
                     {ok, [
                         {set_parameter, {cull_interval, {10, sec}}},
+                        {rebuild_demand_buf},
                         {reset_cull_timer, {10, sec}}
                     ]},
                     pooler:pool_reconfigure(Name, NewConfig)
@@ -1421,6 +1425,7 @@ reconfigure_test_() ->
                 ?assertEqual(
                     {ok, [
                         {set_parameter, {max_age, {100, ms}}},
+                        {rebuild_demand_buf},
                         {cull, []}
                     ]},
                     pooler:pool_reconfigure(Name, NewConfig)
@@ -1480,6 +1485,7 @@ reconfigure_test_() ->
                 ?assertEqual(
                     {ok, [
                         {set_parameter, {max_count, NewMaxCount}},
+                        {rebuild_demand_buf},
                         {set_parameter, {member_start_timeout, {10, sec}}},
                         {set_parameter, {queue_max, 100}},
                         {set_parameter, {metrics_mod, fake_metrics}},
@@ -1500,6 +1506,27 @@ reconfigure_test_() ->
                     gen_server:call(Name, dump_pool)
                 )
             end},
+            {"Change member_order lifo→fifo: action emitted, pool functional, round-robin observable", fun() ->
+                %% Take both workers, return in known order so we know the free list state
+                [P1, P2] = get_n_pids(Name, 2, []),
+                pooler:return_member(Name, P1),
+                pooler:return_member(Name, P2),
+                %% LIFO: P2 (most recent) should come out first
+                ?assertEqual(P2, pooler:take_member(Name)),
+                pooler:return_member(Name, P2),
+                %% Reconfigure to FIFO — verify action list
+                ?assertEqual(
+                    {ok, [{set_member_order, fifo}]},
+                    pooler:pool_reconfigure(Name, StartConfig#{member_order => fifo})
+                ),
+                ?assertMatch(#{member_order := fifo}, gen_server:call(Name, dump_pool)),
+                %% Under FIFO: taking P2 (front) and returning it should rotate
+                ?assertEqual(P2, pooler:take_member(Name)),
+                pooler:return_member(Name, P2),
+                %% P2 was just returned to the back; P1 (idle longest) should come next
+                ?assertEqual(P1, pooler:take_member(Name)),
+                pooler:return_member(Name, P1)
+            end},
             {"Update failed", fun() ->
                 ?assertEqual(
                     {error, changed_unsupported_parameter},
@@ -1512,6 +1539,14 @@ reconfigure_test_() ->
                     pooler:pool_reconfigure(
                         Name, StartConfig#{name := not_a_pool_name}
                     )
+                )
+            end},
+            {"reconfigure rejected when cull/max_age combo exceeds demand buf limit", fun() ->
+                %% cull_interval=10s, max_age=1h → 360 buckets > 256 cap
+                BadConfig = StartConfig#{cull_interval => {10, sec}, max_age => {1, hour}},
+                ?assertMatch(
+                    {error, {demand_history_too_large, #{computed_buckets := 360}}},
+                    pooler:pool_reconfigure(Name, BadConfig)
                 )
             end}
         ]}.
@@ -2369,3 +2404,134 @@ pg_stop() ->
 
 pg_leave(Group, Pid) ->
     pg:leave(Group, Pid).
+
+%% ===== FIFO member_order tests =====
+
+pooler_fifo_member_order_test_() ->
+    {setup,
+        fun() ->
+            application:set_env(pooler, pools, [
+                #{
+                    name => test_pool_fifo,
+                    max_count => 5,
+                    init_count => 3,
+                    start_mfa => {pooled_gs, start_link, [{"fifo-type"}]},
+                    member_order => fifo
+                }
+            ]),
+            application:start(pooler)
+        end,
+        fun(_) -> application:stop(pooler) end, [
+            {"fifo: members served in round-robin order", fun() ->
+                P1 = pooler:take_member(test_pool_fifo),
+                P2 = pooler:take_member(test_pool_fifo),
+                P3 = pooler:take_member(test_pool_fifo),
+                ?assert(is_pid(P1)),
+                ?assertNotEqual(P1, P2),
+                ?assertNotEqual(P2, P3),
+                pooler:return_member(test_pool_fifo, P1),
+                pooler:return_member(test_pool_fifo, P2),
+                pooler:return_member(test_pool_fifo, P3),
+                %% FIFO: oldest idle (P1) comes out first
+                ?assertEqual(P1, pooler:take_member(test_pool_fifo)),
+                ?assertEqual(P2, pooler:take_member(test_pool_fifo)),
+                ?assertEqual(P3, pooler:take_member(test_pool_fifo)),
+                pooler:return_member(test_pool_fifo, P1),
+                pooler:return_member(test_pool_fifo, P2),
+                pooler:return_member(test_pool_fifo, P3)
+            end}
+        ]}.
+
+pooler_fifo_cull_test_() ->
+    {setup,
+        fun() ->
+            application:set_env(pooler, pools, [
+                #{
+                    name => test_pool_fifo_cull,
+                    max_count => 5,
+                    init_count => 2,
+                    start_mfa => {pooled_gs, start_link, [{"fifo-cull"}]},
+                    member_order => fifo,
+                    cull_interval => {200, ms},
+                    max_age => {0, min}
+                }
+            ]),
+            application:start(pooler)
+        end,
+        fun(_) -> application:stop(pooler) end, [
+            {"fifo: excess members culled to init_count", fun() ->
+                Pids = get_n_pids(test_pool_fifo_cull, 5, []),
+                [pooler:return_member(test_pool_fifo_cull, P) || P <- Pids],
+                wait_for_pool_state(
+                    test_pool_fifo_cull,
+                    2000,
+                    fun(U) -> maps:get(free_count, U) =:= 2 end
+                )
+            end}
+        ]}.
+
+pooler_cull_size_invariant_test_() ->
+    {setup,
+        fun() ->
+            Base = #{
+                max_count => 5,
+                init_count => 2,
+                start_mfa => {pooled_gs, start_link, [{"inv"}]},
+                cull_interval => {200, ms},
+                max_age => {0, min}
+            },
+            application:set_env(pooler, pools, [
+                Base#{name => test_pool_lifo_inv},
+                Base#{name => test_pool_fifo_inv, member_order => fifo}
+            ]),
+            application:start(pooler)
+        end,
+        fun(_) -> application:stop(pooler) end, [
+            {"lifo and fifo pools with identical params cull to same size", fun() ->
+                LPids = get_n_pids(test_pool_lifo_inv, 5, []),
+                FPids = get_n_pids(test_pool_fifo_inv, 5, []),
+                [pooler:return_member(test_pool_lifo_inv, P) || P <- LPids],
+                [pooler:return_member(test_pool_fifo_inv, P) || P <- FPids],
+                wait_for_pool_state(
+                    test_pool_lifo_inv,
+                    2000,
+                    fun(U) -> maps:get(free_count, U) =:= 2 end
+                ),
+                wait_for_pool_state(
+                    test_pool_fifo_inv,
+                    2000,
+                    fun(U) -> maps:get(free_count, U) =:= 2 end
+                )
+            end}
+        ]}.
+
+pooler_demand_buf_validation_test_() ->
+    {setup,
+        fun() ->
+            application:start(pooler)
+        end,
+        fun(_) ->
+            application:stop(pooler)
+        end,
+        [
+            {"new_pool rejected when cull/max_age combo exceeds demand buf limit", fun() ->
+                %% cull_interval=10s, max_age=1h → 360 buckets > 256 cap
+                %% The error is wrapped by the pool_sup → pooler_sup supervisor chain.
+                ?assertMatch(
+                    {error, {
+                        {shutdown,
+                            {failed_to_start_child, pooler,
+                                {error, {demand_history_too_large, #{computed_buckets := 360}}}}},
+                        _
+                    }},
+                    pooler:new_pool(#{
+                        name => demand_buf_test_pool,
+                        init_count => 1,
+                        max_count => 5,
+                        start_mfa => {pooled_gs, start_link, [{"test"}]},
+                        cull_interval => {10, sec},
+                        max_age => {1, hour}
+                    })
+                )
+            end}
+        ]}.

@@ -23,7 +23,16 @@
     size_20_ttl_5ms_take_return_one/1,
     bench_size_20_ttl_5ms_take_return_one/2,
     size_500_ttl_5ms_take_return_one/1,
-    bench_size_500_ttl_5ms_take_return_one/2
+    bench_size_500_ttl_5ms_take_return_one/2,
+    %% FIFO (queue) dispatch order — compare against lifo equivalents above
+    fifo_size_5_take_return_one/1,
+    bench_fifo_size_5_take_return_one/2,
+    fifo_size_1000_take_return_one/1,
+    bench_fifo_size_1000_take_return_one/2,
+    fifo_size_500_take_return_all/1,
+    bench_fifo_size_500_take_return_all/2,
+    fifo_size_500_clients_50_take_return_all/1,
+    bench_fifo_size_500_clients_50_take_return_all/2
 ]).
 
 %% @doc Pool of fixed size 5 - try to take just one member and instantly return
@@ -304,15 +313,93 @@ bench_size_500_ttl_5ms_take_return_one(_Input, PoolName) ->
             pooler:return_member(PoolName, Member)
     end.
 
+%% FIFO benchmarks — member_order => fifo (queue dispatch, round-robin)
+
+%% @doc FIFO pool of fixed size 5 — single take/return; measures queue:out overhead vs list head.
+fifo_size_5_take_return_one(init) ->
+    start_fixed_fifo(?FUNCTION_NAME, 5),
+    ?FUNCTION_NAME;
+fifo_size_5_take_return_one({input, _}) ->
+    [];
+fifo_size_5_take_return_one({stop, PoolName}) ->
+    stop(PoolName).
+
+bench_fifo_size_5_take_return_one(_Input, PoolName) ->
+    Member = pooler:take_member(PoolName),
+    true = is_pid(Member),
+    pooler:return_member(PoolName, Member).
+
+%% @doc FIFO pool of fixed size 1000 — larger queue, measures queue:out + queue:in at scale.
+fifo_size_1000_take_return_one(init) ->
+    start_fixed_fifo(?FUNCTION_NAME, 1000),
+    ?FUNCTION_NAME;
+fifo_size_1000_take_return_one({input, _}) ->
+    [];
+fifo_size_1000_take_return_one({stop, PoolName}) ->
+    stop(PoolName).
+
+bench_fifo_size_1000_take_return_one(_Input, PoolName) ->
+    Member = pooler:take_member(PoolName),
+    true = is_pid(Member),
+    pooler:return_member(PoolName, Member).
+
+%% @doc FIFO pool of fixed size 500 — drain all members then return them; exercises full rotation.
+fifo_size_500_take_return_all(init) ->
+    start_fixed_fifo(?FUNCTION_NAME, 500),
+    {?FUNCTION_NAME, 500};
+fifo_size_500_take_return_all({input, {_Pool, Size}}) ->
+    lists:seq(1, Size);
+fifo_size_500_take_return_all({stop, {PoolName, _}}) ->
+    stop(PoolName).
+
+bench_fifo_size_500_take_return_all(_Input, {PoolName, Size}) ->
+    Members = take_n(PoolName, Size),
+    [pooler:return_member(PoolName, Member) || Member <- Members].
+
+%% @doc FIFO pool, 500 members, 50 concurrent clients — measures contention on the queue.
+fifo_size_500_clients_50_take_return_all(init) ->
+    PoolSize = 500,
+    NumClients = 50,
+    PerClient = PoolSize div NumClients,
+    start_fixed_fifo(?FUNCTION_NAME, PoolSize),
+    Clients = [
+        erlang:spawn_link(fun() -> client(?FUNCTION_NAME, 0, PerClient) end)
+     || _ <- lists:seq(1, NumClients)
+    ],
+    {?FUNCTION_NAME, PoolSize, Clients};
+fifo_size_500_clients_50_take_return_all({input, _}) ->
+    [];
+fifo_size_500_clients_50_take_return_all({stop, {PoolName, _Size, Clients}}) ->
+    [
+        begin
+            unlink(Pid),
+            exit(Pid, shutdown)
+        end
+     || Pid <- Clients
+    ],
+    stop(PoolName).
+
+bench_fifo_size_500_clients_50_take_return_all(_Input, {_PoolName, _Size, Clients}) ->
+    Ref = erlang:make_ref(),
+    Self = self(),
+    lists:foreach(fun(C) -> C ! {do, Self, Ref} end, Clients),
+    lists:foreach(
+        fun(_) ->
+            receive
+                {done, RecRef} -> RecRef = Ref
+            after 5000 -> error(timeout)
+            end
+        end,
+        Clients
+    ).
+
 %% Internal
 
 start_fixed(Name, Size) ->
-    Conf = [
-        {name, Name},
-        {init_count, Size},
-        {max_count, Size}
-    ],
-    start(Conf).
+    start([{name, Name}, {init_count, Size}, {max_count, Size}]).
+
+start_fixed_fifo(Name, Size) ->
+    start([{name, Name}, {init_count, Size}, {max_count, Size}, {member_order, fifo}]).
 
 start(Conf0) ->
     Conf = [{start_mfa, {pooled_gs, start_link, [{"test"}]}} | Conf0],
